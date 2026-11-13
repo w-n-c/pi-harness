@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "exa": {
+      "url": "https://mcp.exa.ai/mcp",
+      "exposure": "deferred",
+      "description": "Search the web and extract clean text from web pages"
+    },
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"],
+      "exposure": "deferred",
+      "description": "Fetch current, version-accurate official documentation for libraries and languages"
+    }
+  }
+}

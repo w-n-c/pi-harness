@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REAL_GIT="/usr/bin/git"
+if [ ! -x "$REAL_GIT" ]; then
+  REAL_GIT="$(which -a git | grep -v "guardrails-bin/git" | head -n 1)"
+fi
+
+if [ "${PI_ALLOW_DANGEROUS_GIT:-0}" = "1" ]; then
+  exec "$REAL_GIT" "$@"
+fi
+
+ARGS_STR="$*"
+
+if [[ "$ARGS_STR" =~ (^|[[:space:]])(push)($|[[:space:]]) ]] ||
+   [[ "$ARGS_STR" =~ (^|[[:space:]])reset[[:space:]]+--hard($|[[:space:]]) ]] ||
+   [[ "$ARGS_STR" =~ (^|[[:space:]])clean[[:space:]]+-[a-zA-Z]*f ]] ||
+   [[ "$ARGS_STR" =~ (^|[[:space:]])branch[[:space:]]+-D($|[[:space:]]) ]] ||
+   [[ "$ARGS_STR" =~ (^|[[:space:]])(checkout|restore)[[:space:]]+\.($|[[:space:]]) ]]; then
+  echo "BLOCKED by Pi git guardrail: 'git $ARGS_STR' is a destructive or remote git operation. Do NOT attempt to work around this guardrail via alternative scripts; ask the user for confirmation." >&2
+  exit 126
+fi
+
+exec "$REAL_GIT" "$@"

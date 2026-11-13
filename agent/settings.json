@@ -1,0 +1,10 @@
+{
+  "lastChangelogVersion": "1.5.0",
+  "defaultProvider": "agy",
+  "defaultModel": "gemini-4-argon-medium",
+  "reserveTokens": 20000,
+  "keepRecentTokens": 25000,
+  "defaultTools": [
+    "+codemode"
+  ]
+}

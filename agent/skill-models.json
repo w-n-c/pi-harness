@@ -1,0 +1,52 @@
+{
+  "defaultTier": "balanced",
+  "providers": {
+    "agy": {
+      "deep": { "model": "gemini-4-argon-high", "effort": "high" },
+      "balanced": { "model": "gemini-4-argon-medium", "effort": "medium" },
+      "fast": { "model": "gemini-3.8-flash-high", "effort": "low" }
+    },
+    "anthropic": {
+      "deep": { "model": "claude-opus-4-6", "effort": "high" },
+      "balanced": { "model": "claude-sonnet-4-6", "effort": "medium" },
+      "fast": { "model": "claude-haiku-4-5", "effort": "low" }
+    },
+    "google": {
+      "deep": { "model": "gemini-pro-latest", "effort": "high" },
+      "balanced": { "model": "gemini-flash-latest", "effort": "medium" },
+      "fast": { "model": "gemini-flash-latest", "effort": "low" }
+    },
+    "openai": {
+      "deep": { "model": "gpt-5", "effort": "high" },
+      "balanced": { "model": "gpt-5-mini", "effort": "medium" },
+      "fast": { "model": "gpt-5-nano", "effort": "low" }
+    }
+  },
+  "skills": {
+    "grill-with-docs": "deep",
+    "grill-me": "deep",
+    "grilling": "deep",
+    "domain-modeling": "deep",
+    "codebase-design": "deep",
+    "to-spec": "deep",
+    "to-tickets": "deep",
+    "wayfinder": "deep",
+    "diagnosing-bugs": "deep",
+    "improve-codebase-architecture": "deep",
+    "retro": "deep",
+    "teach": "deep",
+    "implement": "balanced",
+    "implement-spec": "balanced",
+    "tdd": "balanced",
+    "code-review": "balanced",
+    "triage": "balanced",
+    "prototype": "balanced",
+    "research": "balanced",
+    "pr": "balanced",
+    "handoff": "balanced",
+    "ask-matt": "fast",
+    "wait-what": "fast",
+    "setup-matt-pocock-skills": "fast",
+    "wizard": "fast"
+  }
+}
