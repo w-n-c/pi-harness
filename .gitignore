@@ -1,0 +1,13 @@
+# Pi runtime & secrets
+agent/auth.json
+agent/mcp-auth.json
+agent/models-store.json
+agent/sessions/
+agent/install/
+agent/bin/
+agent/mcp.log*
+agent/*.log
+
+# Local issue tracker scratchpad & dependencies
+.scratch/
+node_modules/
