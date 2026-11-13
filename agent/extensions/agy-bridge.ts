@@ -25,6 +25,14 @@ export interface ParsedToolCall {
 	arguments: Record<string, unknown>;
 }
 
+export interface SubagentTaskInput {
+	prompt: string;
+	tier?: ModelTier;
+	model?: string;
+	effort?: string;
+	mode?: "read-only" | "read-write";
+}
+
 export interface AgyBridgeOptions {
 	configPath?: string;
 	runAgyStream?: (args: string[], signal?: AbortSignal) => Promise<AsyncIterable<string> | string[]>;
@@ -180,22 +188,25 @@ async function* defaultSpawnAgyLines(args: string[], signal?: AbortSignal): Asyn
 	}
 }
 
-async function defaultRunAgySubagent(
-	args: string[],
-	signal?: AbortSignal,
+async function consumeAgyResultLines(
+	lines: AsyncIterable<string> | string[],
 ): Promise<{ response: string; usage?: Record<string, number> }> {
 	let finalResponse = "";
 	let finalUsage: Record<string, number> | undefined;
 
-	for await (const line of defaultSpawnAgyLines(args, signal)) {
+	for await (const line of lines) {
+		let parsed: any;
 		try {
-			const parsed = JSON.parse(line);
-			if (parsed.event === "result" && parsed.result) {
-				finalResponse = String(parsed.result.response ?? "").trim();
-				finalUsage = parsed.result.usage;
-			}
+			parsed = JSON.parse(line);
 		} catch {
-			// Ignore non-JSON lines
+			continue;
+		}
+		if (parsed.event === "result" && parsed.result) {
+			if (parsed.result.status === "ERROR") {
+				throw new Error(parsed.result.error || "agy returned status ERROR");
+			}
+			finalResponse = String(parsed.result.response ?? "");
+			finalUsage = parsed.result.usage;
 		}
 	}
 
@@ -204,7 +215,12 @@ async function defaultRunAgySubagent(
 
 export default function agyBridgeExtension(pi: ExtensionAPI, options: AgyBridgeOptions = {}) {
 	const runStream = options.runAgyStream ?? defaultSpawnAgyLines;
-	const runSubagent = options.runAgySubagent ?? defaultRunAgySubagent;
+	const runSubagent =
+		options.runAgySubagent ??
+		(async (args, signal) => {
+			const result = await consumeAgyResultLines(defaultSpawnAgyLines(args, signal));
+			return { response: result.response.trim(), usage: result.usage };
+		});
 
 	function streamAgy(
 		model: Model<Api>,
@@ -242,29 +258,14 @@ export default function agyBridgeExtension(pi: ExtensionAPI, options: AgyBridgeO
 
 				stream.push({ type: "start", partial: output });
 
-				let finalResponseText = "";
 				const lines = await runStream(args, streamOpts?.signal);
-				for await (const line of lines) {
-					let eventObj: any;
-					try {
-						eventObj = JSON.parse(line);
-					} catch {
-						continue;
-					}
+				const { response: finalResponseText, usage } = await consumeAgyResultLines(lines);
 
-					if (eventObj.event === "result" && eventObj.result) {
-						if (eventObj.result.status === "ERROR") {
-							throw new Error(eventObj.result.error || "agy returned status ERROR");
-						}
-						finalResponseText = String(eventObj.result.response ?? "");
-						const u = eventObj.result.usage;
-						if (u) {
-							output.usage.input = u.input_tokens || 0;
-							output.usage.output = u.output_tokens || 0;
-							output.usage.cacheRead = u.cache_read_tokens || 0;
-							output.usage.totalTokens = u.total_tokens || output.usage.input + output.usage.output;
-						}
-					}
+				if (usage) {
+					output.usage.input = usage.input_tokens || 0;
+					output.usage.output = usage.output_tokens || 0;
+					output.usage.cacheRead = usage.cache_read_tokens || 0;
+					output.usage.totalTokens = usage.total_tokens || output.usage.input + output.usage.output;
 				}
 
 				const { textBlocks, toolCalls } = parseResponseSegments(finalResponseText);
@@ -322,20 +323,26 @@ export default function agyBridgeExtension(pi: ExtensionAPI, options: AgyBridgeO
 		streamSimple: streamAgy,
 	});
 
-	const TaskSchema = Type.Object({
-		prompt: Type.String({ description: "Self-contained task prompt for the isolated subagent" }),
-		tier: Type.Optional(
-			Type.Union([Type.Literal("deep"), Type.Literal("balanced"), Type.Literal("fast")], {
-				description: "Vendor-agnostic Model Tier (defaults to 'balanced')",
-			}),
-		),
+	const TierSchema = Type.Optional(
+		Type.Union([Type.Literal("deep"), Type.Literal("balanced"), Type.Literal("fast")], {
+			description: "Vendor-agnostic Model Tier (defaults to 'balanced')",
+		}),
+	);
+	const ModeSchema = Type.Optional(
+		Type.Union([Type.Literal("read-only"), Type.Literal("read-write")], {
+			description: "Execution mode: 'read-only' (default) or 'read-write'",
+		}),
+	);
+	const TaskProperties = {
+		tier: TierSchema,
 		model: Type.Optional(Type.String({ description: "Explicit model override" })),
 		effort: Type.Optional(Type.String({ description: "Explicit reasoning effort override (low|medium|high)" })),
-		mode: Type.Optional(
-			Type.Union([Type.Literal("read-only"), Type.Literal("read-write")], {
-				description: "Execution mode: 'read-only' (default) or 'read-write'",
-			}),
-		),
+		mode: ModeSchema,
+	};
+
+	const TaskSchema = Type.Object({
+		prompt: Type.String({ description: "Self-contained task prompt for the isolated subagent" }),
+		...TaskProperties,
 	});
 
 	pi.registerTool({
@@ -346,35 +353,28 @@ export default function agyBridgeExtension(pi: ExtensionAPI, options: AgyBridgeO
 		promptSnippet: "Delegate isolated single or parallel tasks to fresh-context subagents",
 		parameters: Type.Object({
 			prompt: Type.Optional(Type.String({ description: "Task prompt for a single subagent run" })),
-			tier: Type.Optional(Type.Union([Type.Literal("deep"), Type.Literal("balanced"), Type.Literal("fast")])),
-			model: Type.Optional(Type.String()),
-			effort: Type.Optional(Type.String()),
-			mode: Type.Optional(Type.Union([Type.Literal("read-only"), Type.Literal("read-write")])),
+			...TaskProperties,
 			tasks: Type.Optional(
 				Type.Array(TaskSchema, {
 					description: "Parallel subagent tasks (up to 4 run concurrently)",
 				}),
 			),
 		}),
-		async execute(_toolCallId, params: any, signal) {
+		async execute(_toolCallId, params: any, signal, _onUpdate, ctx: any) {
 			const config = loadSkillModelsConfig(options.configPath);
-			const taskList: Array<{
-				prompt: string;
-				tier?: ModelTier;
-				model?: string;
-				effort?: string;
-				mode?: "read-only" | "read-write";
-			}> = Array.isArray(params.tasks) && params.tasks.length > 0 ? params.tasks : [{ ...params }];
+			const activeProvider: string = ctx?.model?.provider ?? "agy";
+			const taskList: SubagentTaskInput[] =
+				Array.isArray(params.tasks) && params.tasks.length > 0 ? params.tasks : [{ ...params }];
 
-			async function runOneTask(task: (typeof taskList)[number], index: number) {
+			async function runOneTask(task: SubagentTaskInput, index: number) {
 				const tier: ModelTier = task.tier ?? config.defaultTier;
-				const tierTarget = resolveTierForProvider(config, "agy", tier);
-				const resolvedModel = task.model ?? tierTarget?.model ?? "gemini-4-argon-medium";
+				const tierTarget = resolveTierForProvider(config, activeProvider, tier);
+				const defaultProviderTier = resolveTierForProvider(config, activeProvider, config.defaultTier);
+				const resolvedModel = task.model ?? tierTarget?.model ?? defaultProviderTier?.model ?? "";
 				const resolvedEffort = task.effort ?? tierTarget?.effort ?? "medium";
 				const agyMode = task.mode === "read-write" ? "auto" : "plan";
 
 				const args = buildAgyArgs(resolvedModel, String(resolvedEffort), agyMode, task.prompt);
-
 				const result = await runSubagent(args, signal);
 				return { index, resolvedModel, mode: task.mode ?? "read-only", response: result.response };
 			}

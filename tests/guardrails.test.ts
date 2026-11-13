@@ -5,6 +5,8 @@ import guardrailsExtension from "../agent/extensions/guardrails.ts";
 
 function createFakeGuardrailHarness(confirmResult = false) {
 	const toolCallHandlers: Array<(event: any, ctx: any) => Promise<any>> = [];
+	const toolResultHandlers: Array<(event: any, ctx: any) => Promise<any>> = [];
+	const inputHandlers: Array<(event: any, ctx: any) => Promise<any>> = [];
 	const confirmPrompts: Array<{ title: string; message: string }> = [];
 
 	const ctx = {
@@ -21,6 +23,8 @@ function createFakeGuardrailHarness(confirmResult = false) {
 	const pi = {
 		on(event: string, handler: (event: any, ctx: any) => Promise<any>) {
 			if (event === "tool_call") toolCallHandlers.push(handler);
+			if (event === "tool_result") toolResultHandlers.push(handler);
+			if (event === "input") inputHandlers.push(handler);
 			return () => {};
 		},
 	};
@@ -36,6 +40,16 @@ function createFakeGuardrailHarness(confirmResult = false) {
 				if (res) return { result: res, mutatedInput: event.input };
 			}
 			return { result: undefined, mutatedInput: event.input };
+		},
+		async recordToolResult(toolName: string, isError: boolean) {
+			for (const handler of toolResultHandlers) {
+				await handler({ toolName, toolCallId: "tc-1", isError }, ctx);
+			}
+		},
+		async resetTurnWithUserInput(text = "next prompt") {
+			for (const handler of inputHandlers) {
+				await handler({ text, source: "interactive" }, ctx);
+			}
 		},
 	};
 }
@@ -146,5 +160,23 @@ describe("Seam 2: Lifecycle Guardrails (Layer 1 Hook + Layer 2 OS Git Shim)", ()
 		);
 		expect(deepBlockedReset.status).not.toBe(0);
 		expect(deepBlockedReset.stderr).toContain("BLOCKED by Pi git guardrail");
+	});
+
+	test("trips circuit breaker with terminate: true after 3 consecutive tool failures and resets on success or user input", async () => {
+		const harness = createFakeGuardrailHarness(true);
+		guardrailsExtension(harness.pi);
+
+		await harness.recordToolResult("bash", true);
+		await harness.recordToolResult("bash", true);
+		expect((await harness.runToolCall("bash", { command: "ls" })).result).toBeUndefined();
+
+		await harness.recordToolResult("bash", true);
+		const tripped = await harness.runToolCall("bash", { command: "ls" });
+		expect(tripped.result?.block).toBe(true);
+		expect(tripped.result?.terminate).toBe(true);
+		expect(tripped.result?.reason).toContain("CIRCUIT BREAKER");
+
+		await harness.resetTurnWithUserInput("try again");
+		expect((await harness.runToolCall("bash", { command: "ls" })).result).toBeUndefined();
 	});
 });

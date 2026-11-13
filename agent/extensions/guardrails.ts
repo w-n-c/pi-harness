@@ -2,6 +2,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+const MAX_CONSECUTIVE_FAILURES = 3;
+
 const DESTRUCTIVE_BASH_PATTERNS: Array<{ label: string; regex: RegExp }> = [
 	{ label: "git push", regex: /\bgit\s+push\b|['"]push['"]/i },
 	{ label: "git reset --hard", regex: /\bgit\s+reset\s+--hard\b|['"]--hard['"]/i },
@@ -13,7 +15,7 @@ const DESTRUCTIVE_BASH_PATTERNS: Array<{ label: string; regex: RegExp }> = [
 	{ label: "sudo / privilege escalation", regex: /\bsudo\b/ },
 ];
 
-const PROTECTED_PATH_REGEX =
+const PROTECTED_PATH_TOKEN_REGEX =
 	/(?:^|[/"'\s(])(\.env(?:\.[a-zA-Z0-9._-]+)?|auth\.json|mcp-auth\.json|oauth_creds\.json|\.ssh\/id_[a-z0-9_]+)(?:$|["')\s])/i;
 
 const SECRET_CONTENT_PATTERNS: Array<{ label: string; regex: RegExp }> = [
@@ -23,16 +25,20 @@ const SECRET_CONTENT_PATTERNS: Array<{ label: string; regex: RegExp }> = [
 	{ label: "Google API Key", regex: /\bAIzaSy[A-Za-z0-9_-]{33}\b/ },
 ];
 
+function stripSafeEnvTemplates(text: string): string {
+	return text.replace(/\.env\.(example|template)\b/gi, "ENV_TEMPLATE_SAFE");
+}
+
 function isProtectedPath(filePath: string): boolean {
-	const normalized = filePath.replace(/\\/g, "/");
-	const base = path.basename(normalized);
-	if (base === ".env" || (base.startsWith(".env.") && base !== ".env.example" && base !== ".env.template")) {
+	const sanitized = stripSafeEnvTemplates(filePath.replace(/\\/g, "/"));
+	const base = path.basename(sanitized);
+	if (base === ".env" || base.startsWith(".env.")) {
 		return true;
 	}
 	if (base === "auth.json" || base === "mcp-auth.json" || base === "oauth_creds.json") {
 		return true;
 	}
-	if (normalized.includes("/.ssh/") || normalized.startsWith("~/.ssh/")) {
+	if (sanitized.includes("/.ssh/") || sanitized.startsWith("~/.ssh/")) {
 		return true;
 	}
 	return false;
@@ -40,8 +46,32 @@ function isProtectedPath(filePath: string): boolean {
 
 export default function guardrailsExtension(pi: ExtensionAPI) {
 	const shimDir = path.join(os.homedir(), ".pi", "agent", "guardrails-bin");
+	let consecutiveFailures = 0;
+
+	pi.on("input", async () => {
+		consecutiveFailures = 0;
+		return { action: "continue" };
+	});
+
+	pi.on("tool_result", async (event) => {
+		if (event.isError) {
+			consecutiveFailures += 1;
+		} else {
+			consecutiveFailures = 0;
+		}
+		return undefined;
+	});
 
 	pi.on("tool_call", async (event, ctx) => {
+		if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+			consecutiveFailures = 0;
+			return {
+				block: true,
+				terminate: true,
+				reason: `CIRCUIT BREAKER: ${MAX_CONSECUTIVE_FAILURES} consecutive tool calls failed in this turn. Stopping execution to prevent a retry loop—summarize the failure and ask the user how to proceed.`,
+			};
+		}
+
 		const { toolName, input } = event;
 
 		if (toolName === "read" || toolName === "write" || toolName === "edit") {
@@ -77,8 +107,9 @@ export default function guardrailsExtension(pi: ExtensionAPI) {
 
 		if (toolName === "bash") {
 			const command = String(input.command ?? "");
+			const sanitizedForPathCheck = stripSafeEnvTemplates(command);
 
-			if (PROTECTED_PATH_REGEX.test(command) && !command.includes(".env.example")) {
+			if (PROTECTED_PATH_TOKEN_REGEX.test(sanitizedForPathCheck)) {
 				return {
 					block: true,
 					reason:
