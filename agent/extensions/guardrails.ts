@@ -20,9 +20,15 @@ const PROTECTED_PATH_TOKEN_REGEX =
 
 const SECRET_CONTENT_PATTERNS: Array<{ label: string; regex: RegExp }> = [
 	{ label: "Private Key Block", regex: /-----BEGIN (?:OPENSSH|RSA|EC|DSA|PRIVATE) .*?PRIVATE KEY-----/ },
-	{ label: "Anthropic API Key", regex: /\bsk-ant-api03-[A-Za-z0-9_-]{20,}\b/ },
-	{ label: "OpenAI API Key", regex: /\bsk-(?:proj-)?[A-Za-z0-9]{32,}\b/ },
-	{ label: "Google API Key", regex: /\bAIzaSy[A-Za-z0-9_-]{33}\b/ },
+	{
+		label: "Hardcoded Credential Assignment (*_KEY / *_SECRET / *_TOKEN / *_PASSWORD)",
+		regex:
+			/\b[A-Za-z0-9_]*(?:API_?KEY|SECRET(?:_?KEY)?|ACCESS_?TOKEN|AUTH_?TOKEN|PRIVATE_?KEY|CLIENT_?SECRET|PASSWORD)\b\s*["']?\s*[:=]\s*["'](?!\$|\$\{|https?:\/\/|your[-_]|example|dummy|test|todo|replace)[A-Za-z0-9_./+=-]{16,}["']/i,
+	},
+	{
+		label: "Known Provider Token Prefix",
+		regex: /\b(?:sk-ant-api03-[A-Za-z0-9_-]{20,}|sk-(?:proj-|live-)?[A-Za-z0-9]{24,}|AIzaSy[A-Za-z0-9_-]{33}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{20,})\b/,
+	},
 ];
 
 function stripSafeEnvTemplates(text: string): string {
