@@ -3,6 +3,7 @@ import agyBridgeExtension, {
 	buildAgyArgs,
 	buildAgyBridgePrompt,
 	encodeAgyStdinMessage,
+	MAX_AGY_PROMPT_BYTES,
 	parseResponseSegments,
 } from "../agent/extensions/agy-bridge.ts";
 
@@ -67,6 +68,48 @@ describe("Seam 3: agy Provider Bridge & Subagent Tool", () => {
 				arguments: { command: "ls -la" },
 			},
 		]);
+	});
+
+	test("annotates toolResult with totalLines and compacts oldest toolResults so prompt stays under agy 175KB limit without truncating newest read", () => {
+		const oldLargeOutput = Array.from({ length: 1200 }, (_, i) => `old-line-${i}: ${"x".repeat(120)}`).join("\n");
+		const newestBoxHtml = Array.from({ length: 372 }, (_, i) => `<div data-line="${i}">box content</div>`).join("\n");
+
+		const prompt = buildAgyBridgePrompt(
+			"System prompt",
+			[],
+			[
+				{ role: "user", content: [{ type: "text", text: "Start review" }], timestamp: 1 } as any,
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "tc1", name: "read", arguments: { path: "old.txt" } }],
+					timestamp: 2,
+				} as any,
+				{
+					role: "toolResult",
+					toolName: "read",
+					isError: false,
+					content: [{ type: "text", text: oldLargeOutput }],
+					timestamp: 3,
+				} as any,
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "tc2", name: "read", arguments: { path: ".scratch/every-layout/box.html" } }],
+					timestamp: 4,
+				} as any,
+				{
+					role: "toolResult",
+					toolName: "read",
+					isError: false,
+					content: [{ type: "text", text: newestBoxHtml }],
+					timestamp: 5,
+				} as any,
+			],
+		);
+
+		expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(MAX_AGY_PROMPT_BYTES);
+		expect(prompt).toContain('totalLines="372"');
+		expect(prompt).toContain('<div data-line="371">box content</div>');
+		expect(prompt).toContain("older tool output compacted");
 	});
 
 	test("streams NDJSON from agy subprocess via stdin stream-json (avoiding argv E2BIG) and emits Pi toolCall events", async () => {

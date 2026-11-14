@@ -19,6 +19,10 @@ import { loadSkillModelsConfig, type ModelTier, resolveTierForProvider } from ".
 
 const SMART_ZONE_CONTEXT_WINDOW = 160000;
 const MAX_CONCURRENCY = 4;
+// agy truncates the tail of any single USER_INPUT message at ~191,590 bytes.
+// Keep our serialized bridge prompt below 175,000 bytes by compacting oldest tool results first.
+export const MAX_AGY_PROMPT_BYTES = 175000;
+const COMPACTED_TOOL_PREVIEW_CHARS = 1200;
 
 export interface ParsedToolCall {
 	name: string;
@@ -133,22 +137,71 @@ export function buildAgyBridgePrompt(systemPrompt: string | undefined, tools: To
 		sections.push(`<pi_available_tools>\n${JSON.stringify(serializedTools)}\n</pi_available_tools>`);
 	}
 
-	const transcriptLines: string[] = [];
+	const transcriptEntries: Array<{ role: string; text: string; compactText?: string }> = [];
 	for (const msg of messages) {
 		if (msg.role === "system") continue;
 		if (msg.role === "user") {
-			transcriptLines.push(`[USER]\n${extractMessageText(msg)}`);
+			transcriptEntries.push({ role: "user", text: `[USER]\n${extractMessageText(msg)}` });
 		} else if (msg.role === "assistant") {
-			transcriptLines.push(`[ASSISTANT]\n${extractMessageText(msg)}`);
+			transcriptEntries.push({ role: "assistant", text: `[ASSISTANT]\n${extractMessageText(msg)}` });
 		} else if (msg.role === "toolResult") {
 			const resultText = extractMessageText(msg);
-			transcriptLines.push(
-				`[TOOL_RESULT toolName="${(msg as any).toolName ?? ""}" isError="${Boolean((msg as any).isError)}"]\n${resultText}`,
-			);
+			const lineCount = resultText ? resultText.split("\n").length : 0;
+			const toolName = (msg as any).toolName ?? "";
+			const isError = Boolean((msg as any).isError);
+			const header = `[TOOL_RESULT toolName="${toolName}" isError="${isError}" totalLines="${lineCount}"]`;
+			const fullEntry = `${header}\n${resultText}`;
+			let compactEntry = fullEntry;
+			if (resultText.length > COMPACTED_TOOL_PREVIEW_CHARS * 2) {
+				const head = resultText.slice(0, COMPACTED_TOOL_PREVIEW_CHARS);
+				const tail = resultText.slice(-COMPACTED_TOOL_PREVIEW_CHARS);
+				compactEntry = `${header}\n${head}\n...[older tool output compacted (${resultText.length} chars, ${lineCount} lines total) to preserve recent context]...\n${tail}`;
+			}
+			transcriptEntries.push({ role: "toolResult", text: fullEntry, compactText: compactEntry });
 		}
 	}
 
-	sections.push(`<pi_conversation>\n${transcriptLines.join("\n\n")}\n</pi_conversation>`);
+	const basePrefix = `${sections.join("\n\n")}\n\n<pi_conversation>\n`;
+	const baseSuffix = `\n</pi_conversation>`;
+	const baseOverheadBytes = Buffer.byteLength(basePrefix + baseSuffix, "utf8");
+	const maxConversationBytes = Math.max(16000, MAX_AGY_PROMPT_BYTES - baseOverheadBytes);
+
+	const activeTexts = transcriptEntries.map((e) => e.text);
+	const joinByteLength = (items: string[]) => Buffer.byteLength(items.join("\n\n"), "utf8");
+
+	// Step 1: Compact oldest toolResult blocks first, starting with turns prior to the latest assistant call
+	if (joinByteLength(activeTexts) > maxConversationBytes) {
+		let lastAssistantIdx = -1;
+		for (let i = transcriptEntries.length - 1; i >= 0; i--) {
+			if (transcriptEntries[i].role === "assistant") {
+				lastAssistantIdx = i;
+				break;
+			}
+		}
+		const firstPassLimit = lastAssistantIdx > 0 ? lastAssistantIdx : Math.max(0, activeTexts.length - 2);
+		for (let i = 0; i < firstPassLimit; i++) {
+			if (transcriptEntries[i].role === "toolResult" && transcriptEntries[i].compactText) {
+				activeTexts[i] = transcriptEntries[i].compactText!;
+				if (joinByteLength(activeTexts) <= maxConversationBytes) break;
+			}
+		}
+		// If still over budget, compact any remaining bulky toolResults except the newest one
+		if (joinByteLength(activeTexts) > maxConversationBytes) {
+			for (let i = firstPassLimit; i < activeTexts.length - 1; i++) {
+				if (transcriptEntries[i].role === "toolResult" && transcriptEntries[i].compactText) {
+					activeTexts[i] = transcriptEntries[i].compactText!;
+					if (joinByteLength(activeTexts) <= maxConversationBytes) break;
+				}
+			}
+		}
+	}
+
+	// Step 2: If still over budget, drop oldest entries from the front so newest tail is never truncated by agy
+	while (activeTexts.length > 1 && joinByteLength(activeTexts) > maxConversationBytes) {
+		activeTexts.shift();
+	}
+
+	sections.push(`<pi_conversation>\n${activeTexts.join("\n\n")}\n</pi_conversation>`);
 	return sections.join("\n\n");
 }
 
