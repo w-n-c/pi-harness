@@ -35,9 +35,14 @@ export interface SubagentTaskInput {
 
 export interface AgyBridgeOptions {
 	configPath?: string;
-	runAgyStream?: (args: string[], signal?: AbortSignal) => Promise<AsyncIterable<string> | string[]>;
+	runAgyStream?: (
+		args: string[],
+		prompt: string,
+		signal?: AbortSignal,
+	) => Promise<AsyncIterable<string> | string[]>;
 	runAgySubagent?: (
 		args: string[],
+		prompt: string,
 		signal?: AbortSignal,
 	) => Promise<{ response: string; usage?: Record<string, number> }>;
 }
@@ -56,16 +61,30 @@ const AGY_MODELS = [
 	{ id: "claude-sonnet-5-5-medium", name: "Claude Sonnet 5.5 (Medium)", reasoning: true },
 ];
 
-export function buildAgyArgs(modelId: string, effort?: string, mode: "plan" | "auto" = "plan", prompt = ""): string[] {
+export function buildAgyArgs(modelId: string, effort?: string, mode: "plan" | "auto" = "plan"): string[] {
 	const suffixMatch = modelId.match(/-(low|medium|high|xhigh|max)$/i);
 	const resolvedEffort = suffixMatch ? suffixMatch[1].toLowerCase() : effort;
 
-	const args = ["--output-format", "stream-json", "--disable-slash-commands", "--mode", mode, "--model", modelId];
+	const args = [
+		"--input-format",
+		"stream-json",
+		"--output-format",
+		"stream-json",
+		"--disable-slash-commands",
+		"--mode",
+		mode,
+		"--model",
+		modelId,
+	];
 	if (resolvedEffort && !suffixMatch) {
 		args.push("--effort", resolvedEffort === "minimal" ? "low" : resolvedEffort);
 	}
-	args.push("-p", prompt);
+	args.push("-p", "");
 	return args;
+}
+
+export function encodeAgyStdinMessage(prompt: string): string {
+	return `${JSON.stringify({ event: "user", message: { content: prompt } })}\n`;
 }
 
 function extractMessageText(msg: Message): string {
@@ -162,14 +181,17 @@ export function parseResponseSegments(rawResponse: string): {
 	};
 }
 
-async function* defaultSpawnAgyLines(args: string[], signal?: AbortSignal): AsyncGenerator<string> {
+async function* defaultSpawnAgyLines(args: string[], prompt: string, signal?: AbortSignal): AsyncGenerator<string> {
 	const proc = spawn("agy", args, {
-		stdio: ["ignore", "pipe", "pipe"],
+		stdio: ["pipe", "pipe", "pipe"],
 	});
 
 	if (signal) {
 		signal.addEventListener("abort", () => proc.kill("SIGTERM"), { once: true });
 	}
+
+	proc.stdin.write(encodeAgyStdinMessage(prompt));
+	proc.stdin.end();
 
 	let buffer = "";
 	for await (const chunk of proc.stdout) {
@@ -218,8 +240,8 @@ export default function agyBridgeExtension(pi: ExtensionAPI, options: AgyBridgeO
 	const runStream = options.runAgyStream ?? defaultSpawnAgyLines;
 	const runSubagent =
 		options.runAgySubagent ??
-		(async (args, signal) => {
-			const result = await consumeAgyResultLines(defaultSpawnAgyLines(args, signal));
+		(async (args, prompt, signal) => {
+			const result = await consumeAgyResultLines(defaultSpawnAgyLines(args, prompt, signal));
 			return { response: result.response.trim(), usage: result.usage };
 		});
 
@@ -255,11 +277,11 @@ export default function agyBridgeExtension(pi: ExtensionAPI, options: AgyBridgeO
 			try {
 				const prompt = buildAgyBridgePrompt(systemPrompt, tools, transcript.messages);
 				const effort = streamOpts?.reasoning && streamOpts.reasoning !== "off" ? streamOpts.reasoning : "medium";
-				const args = buildAgyArgs(model.id, effort, "plan", prompt);
+				const args = buildAgyArgs(model.id, effort, "plan");
 
 				stream.push({ type: "start", partial: output });
 
-				const lines = await runStream(args, streamOpts?.signal);
+				const lines = await runStream(args, prompt, streamOpts?.signal);
 				const { response: finalResponseText, usage } = await consumeAgyResultLines(lines);
 
 				if (usage) {
@@ -375,8 +397,8 @@ export default function agyBridgeExtension(pi: ExtensionAPI, options: AgyBridgeO
 				const resolvedEffort = task.effort ?? tierTarget?.effort ?? "medium";
 				const agyMode = task.mode === "read-write" ? "auto" : "plan";
 
-				const args = buildAgyArgs(resolvedModel, String(resolvedEffort), agyMode, task.prompt);
-				const result = await runSubagent(args, signal);
+				const args = buildAgyArgs(resolvedModel, String(resolvedEffort), agyMode);
+				const result = await runSubagent(args, task.prompt, signal);
 				return { index, resolvedModel, mode: task.mode ?? "read-only", response: result.response };
 			}
 

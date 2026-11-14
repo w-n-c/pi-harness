@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import agyBridgeExtension, {
+	buildAgyArgs,
 	buildAgyBridgePrompt,
+	encodeAgyStdinMessage,
 	parseResponseSegments,
 } from "../agent/extensions/agy-bridge.ts";
 
@@ -67,13 +69,24 @@ describe("Seam 3: agy Provider Bridge & Subagent Tool", () => {
 		]);
 	});
 
-	test("streams NDJSON from agy subprocess and emits Pi toolCall events when <pi_tool_call> is returned", async () => {
+	test("streams NDJSON from agy subprocess via stdin stream-json (avoiding argv E2BIG) and emits Pi toolCall events", async () => {
 		const harness = createFakeAgyPi();
 		const spawnedArgs: string[][] = [];
+		const spawnedPrompts: string[] = [];
+
+		const cliArgs = buildAgyArgs("gemini-4-argon-medium", "medium", "plan");
+		expect(cliArgs).toContain("--input-format");
+		expect(cliArgs[cliArgs.indexOf("--input-format") + 1]).toBe("stream-json");
+		expect(cliArgs.slice(-2)).toEqual(["-p", ""]);
+		expect(JSON.parse(encodeAgyStdinMessage("hello world"))).toEqual({
+			event: "user",
+			message: { content: "hello world" },
+		});
 
 		agyBridgeExtension(harness.pi, {
-			runAgyStream: async (args) => {
+			runAgyStream: async (args, prompt) => {
 				spawnedArgs.push(args);
+				spawnedPrompts.push(prompt);
 				return [
 					JSON.stringify({
 						event: "init",
@@ -128,6 +141,9 @@ describe("Seam 3: agy Provider Bridge & Subagent Tool", () => {
 			events.push(ev);
 		}
 
+		expect(spawnedArgs[0].slice(-2)).toEqual(["-p", ""]);
+		expect(spawnedPrompts[0]).toContain("Read GLOSSARY.md");
+
 		const doneEvent = events.find((e) => e.type === "done");
 		expect(doneEvent).toBeDefined();
 		expect(doneEvent.reason).toBe("toolUse");
@@ -149,10 +165,10 @@ describe("Seam 3: agy Provider Bridge & Subagent Tool", () => {
 		const calls: string[][] = [];
 
 		agyBridgeExtension(harness.pi, {
-			runAgySubagent: async (args) => {
+			runAgySubagent: async (args, prompt) => {
 				calls.push(args);
 				return {
-					response: `Completed: ${args.at(-1)}`,
+					response: `Completed: ${prompt}`,
 					usage: { input_tokens: 500, output_tokens: 50 },
 				};
 			},
