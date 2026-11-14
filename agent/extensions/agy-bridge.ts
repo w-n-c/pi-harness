@@ -101,13 +101,14 @@ export function buildAgyBridgePrompt(systemPrompt: string | undefined, tools: To
 	);
 
 	if (systemPrompt) {
-		sections.push(`<pi_system_prompt>\n${systemPrompt}\n</pi_system_prompt>`);
+		const compactPrompt = systemPrompt.replace(/<docs>[\s\S]*?<\/docs>\s*/g, "").trim();
+		sections.push(`<pi_system_prompt>\n${compactPrompt}\n</pi_system_prompt>`);
 	}
 
 	if (tools.length > 0) {
 		const serializedTools = tools.map((t) => ({
 			name: t.name,
-			description: t.description,
+			description: t.description.split("\n\nCodemode:")[0].trim(),
 			parameters: t.parameters,
 		}));
 		sections.push(`<pi_available_tools>\n${JSON.stringify(serializedTools)}\n</pi_available_tools>`);

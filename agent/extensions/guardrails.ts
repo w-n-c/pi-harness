@@ -59,6 +59,12 @@ export default function guardrailsExtension(pi: ExtensionAPI) {
 		return { action: "continue" };
 	});
 
+	pi.on("before_agent_start", async (event) => {
+		event.systemPromptOptions.promptGuidelines.push(
+			"Always use 'fd' instead of 'find', 'rg' instead of 'grep', and 'jq' instead of inline python/node JSON scripts.",
+		);
+	});
+
 	pi.on("tool_result", async (event) => {
 		if (event.isError) {
 			consecutiveFailures += 1;
@@ -120,6 +126,30 @@ export default function guardrailsExtension(pi: ExtensionAPI) {
 					block: true,
 					reason:
 						"SECURITY POLICY: Command references a protected credential file (.env, auth.json, or .ssh key). Do NOT attempt to read or modify this file via alternative commands or scripts; ask the user instead.",
+				};
+			}
+
+			if (/(?:^|[;&|]\s*)find\s+/.test(command) && !command.includes("node_modules")) {
+				return {
+					block: true,
+					reason:
+						"PERFORMANCE GUARDRAIL: Do not use 'find' (it traverses node_modules and floods context). Use 'fd' (e.g. 'fd --max-depth 4') or 'rg --files' instead, which automatically respect .gitignore.",
+				};
+			}
+
+			if (/(?:^|[;&]\s*)\b(?:e?grep)\s+-[a-zA-Z]*[rR]/.test(command)) {
+				return {
+					block: true,
+					reason:
+						"PERFORMANCE GUARDRAIL: Do not use recursive 'grep -r' (it traverses node_modules/.git and is slow). Use 'rg' (ripgrep) instead, which automatically respects .gitignore.",
+				};
+			}
+
+			if (/\b(?:python3?\s+-c\s+.*?\bjson\.load|node\s+-e\s+.*?\bJSON\.parse)\b/s.test(command)) {
+				return {
+					block: true,
+					reason:
+						"PERFORMANCE GUARDRAIL: Use 'jq' instead of inline python/node scripts to inspect or parse JSON files.",
 				};
 			}
 

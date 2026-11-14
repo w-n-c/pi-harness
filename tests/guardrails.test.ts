@@ -191,4 +191,37 @@ describe("Seam 2: Lifecycle Guardrails (Layer 1 Hook + Layer 2 OS Git Shim)", ()
 		await harness.resetTurnWithUserInput("try again");
 		expect((await harness.runToolCall("bash", { command: "ls" })).result).toBeUndefined();
 	});
+
+	test("blocks raw 'find', recursive 'grep', and inline python/node JSON parsing in favor of fd, rg, and jq", async () => {
+		const harness = createFakeGuardrailHarness(true);
+		guardrailsExtension(harness.pi);
+
+		const findCall = await harness.runToolCall("bash", {
+			command: 'git status -s && find . -maxdepth 4 -not -path "*/.*"',
+		});
+		expect(findCall.result?.block).toBe(true);
+		expect(findCall.result?.reason).toContain("fd");
+
+		const grepCall = await harness.runToolCall("bash", {
+			command: "grep -rn 'ModelTier' agent/",
+		});
+		expect(grepCall.result?.block).toBe(true);
+		expect(grepCall.result?.reason).toContain("rg");
+
+		const pipeGrep = await harness.runToolCall("bash", {
+			command: "ps aux | grep node",
+		});
+		expect(pipeGrep.result).toBeUndefined();
+
+		const pyJsonCall = await harness.runToolCall("bash", {
+			command: `python3 -c "import json; print(json.load(open('package.json'))['name'])"`,
+		});
+		expect(pyJsonCall.result?.block).toBe(true);
+		expect(pyJsonCall.result?.reason).toContain("jq");
+
+		const fdCall = await harness.runToolCall("bash", {
+			command: "fd --max-depth 4",
+		});
+		expect(fdCall.result).toBeUndefined();
+	});
 });
