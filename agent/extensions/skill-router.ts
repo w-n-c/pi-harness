@@ -2,13 +2,15 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { AutocompleteItem, AutocompleteProvider, AutocompleteSuggestions } from "@earendil-works/pi-tui";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 export type ModelTier = "deep" | "balanced" | "fast";
 
 export interface TierTarget {
 	model: string;
-	effort: ThinkingLevel;
+	/** Optional Pi thinking level. Omitted targets inherit the session's current level. */
+	effort?: ThinkingLevel;
 }
 
 export interface SkillModelsConfig {
@@ -82,6 +84,44 @@ function parseInlineOverride(text: string): {
 	return { cleanedText, overrideModelId: token };
 }
 
+/**
+ * Extracts a trailing `@<partial>` token from the text before the cursor.
+ * Returns null when the cursor is not inside an @-token. Bare `@file` references used by
+ * Pi's path provider resolve through the same syntax, so completion here only fires for the
+ * `@deep`/`@balanced`/`@fast`/`@<model-id>` tokens this extension consumes.
+ */
+export function extractAtToken(beforeCursor: string): string | null {
+	const match = beforeCursor.match(/(?:^|\s)@([a-z0-9._/-]*)$/i);
+	return match ? match[1] : null;
+}
+
+/** Builds the `@`-token completion list from the configured tiers and the active provider's models. */
+export function buildOverrideItems(
+	config: SkillModelsConfig,
+	provider: string,
+	models: ReadonlyArray<{ id: string; name?: string }>,
+): AutocompleteItem[] {
+	const items: AutocompleteItem[] = [];
+	const tiers = config.providers[provider];
+	for (const tier of ["deep", "balanced", "fast"] as ModelTier[]) {
+		const target = tiers?.[tier];
+		if (!target) continue;
+		items.push({
+			value: `@${tier}`,
+			label: `@${tier}`,
+			description: `${target.model}${target.effort ? ` (${target.effort} thinking)` : ""}`,
+		});
+	}
+	for (const model of models) {
+		items.push({
+			value: `@${model.id}`,
+			label: `@${model.id}`,
+			description: model.name && model.name !== model.id ? model.name : undefined,
+		});
+	}
+	return items;
+}
+
 export default function skillRouterExtension(pi: ExtensionAPI, options: SkillRouterOptions = {}) {
 	const configPath = options.configPath ?? DEFAULT_CONFIG_PATH;
 	const skillsDirs = options.skillsDirs ?? DEFAULT_SKILLS_DIRS;
@@ -141,6 +181,57 @@ export default function skillRouterExtension(pi: ExtensionAPI, options: SkillRou
 			}
 			ctx.ui.notify("Usage: /tier <deep|balanced|fast|lock|auto>", "warning");
 		},
+	});
+
+	pi.on("session_start", (_event, ctx) => {
+		ctx.ui.addAutocompleteProvider((current: AutocompleteProvider): AutocompleteProvider => ({
+			triggerCharacters: ["@"],
+			async getSuggestions(
+				lines: string[],
+				cursorLine: number,
+				cursorCol: number,
+				opts: { signal: AbortSignal; force?: boolean },
+			): Promise<AutocompleteSuggestions | null> {
+				const beforeCursor = (lines[cursorLine] ?? "").slice(0, cursorCol);
+				const partial = extractAtToken(beforeCursor);
+				if (partial === null) {
+					return current.getSuggestions(lines, cursorLine, cursorCol, opts);
+				}
+				if (partial.includes("/")) {
+					// Looks like an @path reference; let Pi's path provider handle it.
+					return current.getSuggestions(lines, cursorLine, cursorCol, opts);
+				}
+
+				const config = loadSkillModelsConfig(configPath);
+				const provider = ctx.model?.provider ?? "";
+				const providerModels = ctx.modelRegistry
+					.getAll()
+					.filter((m) => m.provider === provider)
+					.map((m) => ({ id: m.id, name: (m as { name?: string }).name }));
+
+				const prefix = `@${partial}`;
+				const lower = prefix.toLowerCase();
+				const items = buildOverrideItems(config, provider, providerModels).filter((item) =>
+					item.value.toLowerCase().startsWith(lower),
+				);
+				if (items.length === 0) {
+					return current.getSuggestions(lines, cursorLine, cursorCol, opts);
+				}
+				return { prefix, items };
+			},
+			applyCompletion(
+				lines: string[],
+				cursorLine: number,
+				cursorCol: number,
+				item: AutocompleteItem,
+				prefix: string,
+			) {
+				return current.applyCompletion(lines, cursorLine, cursorCol, item, prefix);
+			},
+			shouldTriggerFileCompletion(lines: string[], cursorLine: number, cursorCol: number) {
+				return current.shouldTriggerFileCompletion?.(lines, cursorLine, cursorCol) ?? true;
+			},
+		}));
 	});
 
 	pi.on("input", async (event, ctx) => {
