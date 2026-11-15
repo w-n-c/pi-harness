@@ -21,6 +21,10 @@ A deterministic policy check triggered automatically at a tool or repository bou
 _Avoid_: Prompt reminder, safety instruction
 
 **Model Tier**:
-A vendor-agnostic capability level (such as `deep`, `balanced`, or `fast`) assigned to a skill or subagent role and resolved in code to a concrete provider model and reasoning effort.
+A vendor-agnostic capability level (such as `deep`, `balanced`, or `fast`) assigned to a skill or subagent role and resolved in code to a concrete provider model and an optional thinking level ("effort"). A tier's thinking level is bound to the `/skill:<name>` command, not to skill loading.
 _Avoid_: Hardcoded model ID, frontmatter model string
+
+**Provider Fallback**:
+An optional provider registration (currently `agy`) that is dormant unless selected as `defaultProvider`. It exists only to cover environments without a direct API key and must never be assumed by shared tools such as `subagent`.
+_Avoid_: Default provider, hardcoded CLI dependency
 

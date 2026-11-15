@@ -1,5 +1,11 @@
 ## Agent skills
 
+### Workflow routing
+
+Most skills in `~/.agents/skills/` set `disable-model-invocation: true`, so you **cannot** load them yourself. Only the user can run them as `/skill:<name>`. When a task matches one, name the exact command and hand off explicitly.
+
+The Model Tier is bound to the `/skill:<name>` command, not to skill loading: it does **not** change when a skill is referenced or read, and the `subagent` tool never changes the main chat's tier. When you finish planning and it is time to implement, say so plainly — e.g. "Run `/skill:implement` to proceed; that also switches to the balanced model." Do not just say "proceed" and start writing code on the planning model. A one-off tier override can be appended to any message as `@deep`, `@balanced`, or `@fast`.
+
 ### Issue tracker
 
 Issues and specs live as local markdown files under `.scratch/<feature-slug>/`. See `docs/agents/issue-tracker.md`.

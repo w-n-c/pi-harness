@@ -19,8 +19,8 @@ pi update
 # 2. Language runtimes & JSON tooling via mise
 mise use -g node@latest bun@latest python@latest jq@latest
 
-# 3. Antigravity CLI (used by agy-bridge while on Gemini Pro subscription)
-agy --version
+# 3. (optional) Antigravity CLI — only for the legacy 'agy' provider fallback
+# agy --version
 ```
 
 ### Essential CLI Tools for Agent Performance
@@ -41,7 +41,7 @@ Install these via your system package manager (`pacman`, `apt`, `dnf`, or `mise`
 Quick check for all recommended CLI tools:
 
 ```bash
-for cmd in pi agy git rg fd jq fzf curl bun node python3; do
+for cmd in pi git rg fd jq fzf curl bun node python3; do
   command -v "$cmd" >/dev/null && echo "OK: $cmd" || echo "MISSING: $cmd"
 done
 ```
@@ -58,8 +58,8 @@ Pi 1.5+ automatically discovers skills in `~/.agents/skills/` (the cross-agent s
 # Install all Matt Pocock skills globally into ~/.agents/skills/
 npx skills add mattpocock/skills -g
 
-# Keep ~/.gemini/skills symlinked to the same single source of truth for agy:
-ln -sfn ~/.agents/skills ~/.gemini/skills
+# (optional) Keep ~/.gemini/skills symlinked to the same single source of truth for agy:
+# ln -sfn ~/.agents/skills ~/.gemini/skills
 ```
 
 ### Using the skills inside Pi
@@ -83,7 +83,7 @@ Skills with `disable-model-invocation: true` stay out of the system prompt until
 ### Adding a new skill
 
 Create `<skill-name>/SKILL.md` in one of three places:
-1. **Cross-agent global (`~/.agents/skills/<skill-name>/SKILL.md`)**: Shared between both `pi` and `agy`.
+1. **Cross-agent global (`~/.agents/skills/<skill-name>/SKILL.md`)**: Shared between `pi` and other Agent-Skills harnesses.
 2. **Pi-only global (`~/.pi/agent/skills/<skill-name>/SKILL.md`)**: Loaded only by `pi`.
 3. **Project-local (`.pi/skills/<skill-name>/SKILL.md` or `.agents/skills/<skill-name>/SKILL.md`)**: Checked into a specific project repository.
 
@@ -115,8 +115,10 @@ To keep `SKILL.md` files free of vendor-specific model names, [agent/skill-model
 }
 ```
 
-- **Inline one-off override on any prompt**: Append `@deep`, `@balanced`, `@fast`, or `@<model-id>` to any message (e.g., `/skill:implement @deep build parser`).
+- **Inline one-off override on any prompt**: Append `@deep`, `@balanced`, `@fast`, or `@<model-id>` to any message (e.g., `/skill:implement @deep build parser`). These tokens complete on Tab and are stripped from the prompt before it is sent.
 - **Session command**: Run `/tier deep`, `/tier balanced`, `/tier fast`, `/tier lock` (disable auto-switching), or `/tier auto` (re-enable auto-switching).
+
+Each tier maps to a model **and an optional Thinking Level** (`effort`). A tier with no `effort` leaves the session's thinking level untouched, which avoids accidentally forcing a model's lowest level (`off`).
 
 ---
 
@@ -152,9 +154,11 @@ After adding a server, ensure `"exposure": "deferred"` is set on the entry in `m
 
 ## 5. Switching Model Providers Later
 
-While on your Gemini Pro subscription, [agent/settings.json](file:///home/w-n-c/.pi/agent/settings.json) sets `"defaultProvider": "agy"`, which routes through [agent/extensions/agy-bridge.ts](file:///home/w-n-c/.pi/agent/extensions/agy-bridge.ts) with a **160K Smart Zone** context window cap (triggering auto-compaction around ~140K tokens).
+The current default is **OpenRouter** with DeepSeek models. [agent/settings.json](file:///home/w-n-c/.pi/agent/settings.json) sets `"defaultProvider": "openrouter"`; per-model OpenRouter routing preferences (which upstream provider serves the request) live in [agent/models.json](file:///home/w-n-c/.pi/agent/models.json).
 
-To switch to a direct API provider (`anthropic`, `openai`, `google`, `openrouter`, or local `llama.cpp`) later:
+An optional `agy` provider ([agent/extensions/agy-bridge.ts](file:///home/w-n-c/.pi/agent/extensions/agy-bridge.ts)) wraps the Antigravity CLI with a **160K Smart Zone** context window cap. It exists only as a workaround for environments without a direct API key and is dormant unless `defaultProvider` is set to `agy`.
+
+To change providers:
 
 1. Authenticate in Pi:
    ```text
@@ -177,11 +181,13 @@ To switch to a direct API provider (`anthropic`, `openai`, `google`, `openrouter
 ├── agent/
 │   ├── settings.json                # Default provider, Smart Zone compaction thresholds
 │   ├── skill-models.json            # Vendor-agnostic Model Tier routing table
+│   ├── models.json                  # Per-model overrides (OpenRouter routing, thinking maps)
 │   ├── mcp.json                     # Global deferred MCP servers (exa, context7)
 │   ├── guardrails-bin/git           # Layer 2 OS-level PATH git shim
 │   └── extensions/
-│       ├── agy-bridge.ts            # Custom 'agy' provider + 'subagent' tool
-│       ├── skill-router.ts          # Deterministic tier switcher + chained skill loader
+│       ├── skill-router.ts          # Deterministic tier switcher + @tier completion + chained skill loader
+│       ├── subagent.ts              # Provider-agnostic 'subagent' tool (spawns child `pi` processes)
+│       ├── agy-bridge.ts            # Optional 'agy' provider fallback (workaround, not the default)
 │       ├── guardrails.ts            # Layer 1 tool_call gates + 3-strike circuit breaker
 │       └── handoff.ts               # /handoff session transfer command
 └── tests/                           # Seam unit & integration tests
@@ -190,5 +196,22 @@ To switch to a direct API provider (`anthropic`, `openai`, `google`, `openrouter
 Run the test suite at any time with:
 
 ```bash
-bun test
+mise exec bun -- bun test
+# or: bun run test
 ```
+
+### Setup & type checking
+
+`node_modules/` is a symlink into the active Pi release, so it is **not** committed. After a
+fresh clone or a `pi update`, recreate it (it reads `agent/install/current-version`):
+
+```bash
+bun run setup      # -> scripts/link-node-modules.sh
+bun run typecheck  # tsc --noEmit
+```
+
+> Note: Bun strips types without checking them, so the test suite does not type-check on its
+> own. `bun run typecheck` currently reports a **known baseline of 8 errors** in
+> `agent/extensions/agy-bridge.ts` (4) and `agent/extensions/guardrails.ts` (4) — pre-existing
+> tool-call and tool-input union typing issues, not regressions. New errors beyond that baseline
+> are yours to fix.
