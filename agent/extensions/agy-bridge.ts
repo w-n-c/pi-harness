@@ -14,11 +14,8 @@ import {
 	type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
-import { loadSkillModelsConfig, type ModelTier, resolveTierForProvider } from "./skill-router.ts";
 
 const SMART_ZONE_CONTEXT_WINDOW = 160000;
-const MAX_CONCURRENCY = 4;
 // agy truncates the tail of any single USER_INPUT message at ~191,590 bytes.
 // Keep our serialized bridge prompt below 175,000 bytes by compacting oldest tool results first.
 export const MAX_AGY_PROMPT_BYTES = 175000;
@@ -29,14 +26,6 @@ export interface ParsedToolCall {
 	arguments: Record<string, unknown>;
 }
 
-export interface SubagentTaskInput {
-	prompt: string;
-	tier?: ModelTier;
-	model?: string;
-	effort?: string;
-	mode?: "read-only" | "read-write";
-}
-
 export interface AgyBridgeOptions {
 	configPath?: string;
 	runAgyStream?: (
@@ -44,11 +33,6 @@ export interface AgyBridgeOptions {
 		prompt: string,
 		signal?: AbortSignal,
 	) => Promise<AsyncIterable<string> | string[]>;
-	runAgySubagent?: (
-		args: string[],
-		prompt: string,
-		signal?: AbortSignal,
-	) => Promise<{ response: string; usage?: Record<string, number> }>;
 }
 
 const AGY_MODELS = [
@@ -291,12 +275,6 @@ async function consumeAgyResultLines(
 
 export default function agyBridgeExtension(pi: ExtensionAPI, options: AgyBridgeOptions = {}) {
 	const runStream = options.runAgyStream ?? defaultSpawnAgyLines;
-	const runSubagent =
-		options.runAgySubagent ??
-		(async (args, prompt, signal) => {
-			const result = await consumeAgyResultLines(defaultSpawnAgyLines(args, prompt, signal));
-			return { response: result.response.trim(), usage: result.usage };
-		});
 
 	function streamAgy(
 		model: Model<Api>,
@@ -397,82 +375,5 @@ export default function agyBridgeExtension(pi: ExtensionAPI, options: AgyBridgeO
 			maxTokens: 32768,
 		})),
 		streamSimple: streamAgy,
-	});
-
-	const TierSchema = Type.Optional(
-		Type.Union([Type.Literal("deep"), Type.Literal("balanced"), Type.Literal("fast")], {
-			description: "Vendor-agnostic Model Tier (defaults to 'balanced')",
-		}),
-	);
-	const ModeSchema = Type.Optional(
-		Type.Union([Type.Literal("read-only"), Type.Literal("read-write")], {
-			description: "Execution mode: 'read-only' (default) or 'read-write'",
-		}),
-	);
-	const TaskProperties = {
-		tier: TierSchema,
-		model: Type.Optional(Type.String({ description: "Explicit model override" })),
-		effort: Type.Optional(Type.String({ description: "Explicit reasoning effort override (low|medium|high)" })),
-		mode: ModeSchema,
-	};
-
-	const TaskSchema = Type.Object({
-		prompt: Type.String({ description: "Self-contained task prompt for the isolated subagent" }),
-		...TaskProperties,
-	});
-
-	pi.registerTool({
-		name: "subagent",
-		label: "Subagent",
-		description:
-			"Delegate one or more isolated fresh-context tasks (research, parallel code-review, or ticket implementation) to child agent processes.",
-		promptSnippet: "Delegate isolated single or parallel tasks to fresh-context subagents",
-		parameters: Type.Object({
-			prompt: Type.Optional(Type.String({ description: "Task prompt for a single subagent run" })),
-			...TaskProperties,
-			tasks: Type.Optional(
-				Type.Array(TaskSchema, {
-					description: "Parallel subagent tasks (up to 4 run concurrently)",
-				}),
-			),
-		}),
-		async execute(_toolCallId, params: any, signal, _onUpdate, ctx: any) {
-			const config = loadSkillModelsConfig(options.configPath);
-			const activeProvider: string = ctx?.model?.provider ?? "agy";
-			const taskList: SubagentTaskInput[] =
-				Array.isArray(params.tasks) && params.tasks.length > 0 ? params.tasks : [{ ...params }];
-
-			async function runOneTask(task: SubagentTaskInput, index: number) {
-				const tier: ModelTier = task.tier ?? config.defaultTier;
-				const tierTarget = resolveTierForProvider(config, activeProvider, tier);
-				const defaultProviderTier = resolveTierForProvider(config, activeProvider, config.defaultTier);
-				const resolvedModel = task.model ?? tierTarget?.model ?? defaultProviderTier?.model ?? "";
-				const resolvedEffort = task.effort ?? tierTarget?.effort ?? "medium";
-				const agyMode = task.mode === "read-write" ? "auto" : "plan";
-
-				const args = buildAgyArgs(resolvedModel, String(resolvedEffort), agyMode);
-				const result = await runSubagent(args, task.prompt, signal);
-				return { index, resolvedModel, mode: task.mode ?? "read-only", response: result.response };
-			}
-
-			const results: Array<{ index: number; resolvedModel: string; mode: string; response: string }> = [];
-			for (let i = 0; i < taskList.length; i += MAX_CONCURRENCY) {
-				const batch = taskList.slice(i, i + MAX_CONCURRENCY);
-				const batchResults = await Promise.all(batch.map((t, idx) => runOneTask(t, i + idx)));
-				results.push(...batchResults);
-			}
-
-			const formatted =
-				results.length === 1
-					? results[0].response
-					: results
-							.map((r) => `### Subagent ${r.index + 1} (${r.resolvedModel}, ${r.mode})\n\n${r.response}`)
-							.join("\n\n---\n\n");
-
-			return {
-				content: [{ type: "text", text: formatted }],
-				details: { count: results.length },
-			};
-		},
 	});
 }
