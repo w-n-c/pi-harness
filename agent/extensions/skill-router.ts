@@ -38,8 +38,7 @@ export function resolveTierForProvider(
 	provider: string,
 	tier: ModelTier,
 ): TierTarget | undefined {
-	const providerTable = config.providers[provider] ?? config.providers.agy;
-	return providerTable?.[tier];
+	return config.providers[provider]?.[tier];
 }
 
 function stripFrontmatter(markdown: string): string {
@@ -93,7 +92,8 @@ export default function skillRouterExtension(pi: ExtensionAPI, options: SkillRou
 		config: SkillModelsConfig,
 		target: { tier?: ModelTier; modelId?: string },
 	) {
-		const activeProvider = ctx.model?.provider ?? "agy";
+		const activeProvider = ctx.model?.provider;
+		if (!activeProvider) return;
 		if (target.modelId) {
 			const explicitModel =
 				ctx.modelRegistry.find(activeProvider, target.modelId) ??
@@ -108,10 +108,14 @@ export default function skillRouterExtension(pi: ExtensionAPI, options: SkillRou
 			const resolved = resolveTierForProvider(config, activeProvider, target.tier);
 			if (!resolved) return;
 			const modelObj = ctx.modelRegistry.find(activeProvider, resolved.model);
-			if (modelObj) {
-				await pi.setModel(modelObj);
+			if (!modelObj) return;
+			await pi.setModel(modelObj);
+			// Only override thinking when the tier declares an effort. Passing undefined would
+			// reach clampThinkingLevel(), which has no index for it and silently falls back to the
+			// model's lowest level ('off' on models that support it) — eager thinking-off by accident.
+			if (resolved.effort) {
+				pi.setThinkingLevel(resolved.effort);
 			}
-			pi.setThinkingLevel(resolved.effort);
 		}
 	}
 

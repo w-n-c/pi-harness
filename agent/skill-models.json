@@ -6,20 +6,10 @@
       "balanced": { "model": "gemini-4-argon-medium", "effort": "medium" },
       "fast": { "model": "gemini-3.8-flash-high", "effort": "low" }
     },
-    "anthropic": {
-      "deep": { "model": "claude-opus-4-6", "effort": "high" },
-      "balanced": { "model": "claude-sonnet-4-6", "effort": "medium" },
-      "fast": { "model": "claude-haiku-4-5", "effort": "low" }
-    },
-    "google": {
-      "deep": { "model": "gemini-pro-latest", "effort": "high" },
-      "balanced": { "model": "gemini-flash-latest", "effort": "medium" },
-      "fast": { "model": "gemini-flash-latest", "effort": "low" }
-    },
-    "openai": {
-      "deep": { "model": "gpt-5", "effort": "high" },
-      "balanced": { "model": "gpt-5-mini", "effort": "medium" },
-      "fast": { "model": "gpt-5-nano", "effort": "low" }
+    "openrouter": {
+      "deep": { "model": "deepseek/deepseek-v4-pro-0813", "effort": "high" },
+      "balanced": { "model": "deepseek/deepseek-v4.1-flash", "effort": "low" },
+      "fast": { "model": "deepseek/deepseek-v4.1-flash", "effort": "low" }
     }
   },
   "skills": {

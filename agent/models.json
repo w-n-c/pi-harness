@@ -1,0 +1,24 @@
+{
+  "providers": {
+    "openrouter": {
+      "modelOverrides": {
+        "deepseek/deepseek-v4-pro-0813": {
+          "compat": {
+            "openRouterRouting": {
+              "order": ["DeepSeek"],
+              "allow_fallbacks": true
+            }
+          }
+        },
+        "deepseek/deepseek-v4.1-flash": {
+          "compat": {
+            "openRouterRouting": {
+              "order": ["DeepInfra", "DeepSeek"],
+              "allow_fallbacks": true
+            }
+          }
+        }
+      }
+    }
+  }
+}
