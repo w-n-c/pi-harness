@@ -84,10 +84,10 @@ export default function guardrailsExtension(pi: ExtensionAPI) {
 			};
 		}
 
-		const { toolName, input } = event;
+		const { toolName } = event;
 
 		if (toolName === "read" || toolName === "write" || toolName === "edit") {
-			const rawPath = String(input.path ?? input.file_path ?? "");
+			const rawPath = String(event.input.path ?? "");
 			if (rawPath && isProtectedPath(rawPath)) {
 				return {
 					block: true,
@@ -97,13 +97,20 @@ export default function guardrailsExtension(pi: ExtensionAPI) {
 		}
 
 		if (toolName === "write" || toolName === "edit") {
-			const textToScan = String(input.content ?? input.newText ?? input.replacement ?? "");
+			// `event` is a discriminated union that also includes CustomToolCallEvent
+			// (input: Record<string, unknown>), so TS cannot narrow it by toolName alone.
+			// Narrow explicitly to the two concrete write-shaped inputs.
+			const writeInput = event.input as { path: string; content: string } | { path: string; edits: { oldText: string; newText: string }[] };
+			const textToScan =
+				"content" in writeInput
+					? writeInput.content
+					: writeInput.edits.map((e) => `${e.newText}\n${e.oldText}`).join("\n");
 			for (const secret of SECRET_CONTENT_PATTERNS) {
 				if (secret.regex.test(textToScan)) {
 					const approved = ctx.hasUI
 						? await ctx.ui.confirm(
 								"Hardcoded Secret Detected",
-								`Detected possible ${secret.label} in ${input.path ?? "file"}. Allow write?`,
+								`Detected possible ${secret.label} in ${writeInput.path}. Allow write?`,
 							)
 						: false;
 					if (!approved) {
@@ -118,7 +125,7 @@ export default function guardrailsExtension(pi: ExtensionAPI) {
 		}
 
 		if (toolName === "bash") {
-			const command = String(input.command ?? "");
+			const command = String(event.input.command ?? "");
 			const sanitizedForPathCheck = stripSafeEnvTemplates(command);
 
 			if (PROTECTED_PATH_TOKEN_REGEX.test(sanitizedForPathCheck)) {
@@ -168,13 +175,13 @@ export default function guardrailsExtension(pi: ExtensionAPI) {
 							reason: `User declined confirmation for destructive operation (${pattern.label}). Do NOT attempt to work around this refusal with another command or script; wait for user instructions.`,
 						};
 					}
-					input.command = `export PATH="${shimDir}:$PATH" PI_ALLOW_DANGEROUS_GIT=1; ${command}`;
+					event.input.command = `export PATH="${shimDir}:$PATH" PI_ALLOW_DANGEROUS_GIT=1; ${command}`;
 					return undefined;
 				}
 			}
 
 			if (!command.includes(shimDir)) {
-				input.command = `export PATH="${shimDir}:$PATH"; ${command}`;
+				event.input.command = `export PATH="${shimDir}:$PATH"; ${command}`;
 			}
 		}
 

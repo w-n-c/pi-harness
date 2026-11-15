@@ -7,6 +7,7 @@ import {
 	createAssistantMessageEventStream,
 	getCurrentSystemPrompt,
 	getCurrentTools,
+	type JsonObject,
 	type Message,
 	type Model,
 	type SimpleStreamOptions,
@@ -23,7 +24,7 @@ const COMPACTED_TOOL_PREVIEW_CHARS = 1200;
 
 export interface ParsedToolCall {
 	name: string;
-	arguments: Record<string, unknown>;
+	arguments: JsonObject;
 }
 
 export interface AgyBridgeOptions {
@@ -202,7 +203,7 @@ export function parseResponseSegments(rawResponse: string): {
 			if (parsed && typeof parsed.name === "string") {
 				toolCalls.push({
 					name: parsed.name,
-					arguments: (parsed.arguments as Record<string, unknown>) ?? {},
+					arguments: (parsed.arguments as JsonObject) ?? {},
 				});
 			}
 		} catch {
@@ -231,7 +232,9 @@ async function* defaultSpawnAgyLines(args: string[], prompt: string, signal?: Ab
 	proc.stdin.end();
 
 	let buffer = "";
-	for await (const chunk of proc.stdout) {
+	// Node's Readable is async-iterable at runtime; the DOM-ish lib types here don't model it,
+	// so go through `unknown` (the alternative is event-based reading).
+	for await (const chunk of proc.stdout as unknown as AsyncIterable<Buffer>) {
 		buffer += chunk.toString("utf8");
 		let newlineIdx = buffer.indexOf("\n");
 		while (newlineIdx !== -1) {
@@ -307,7 +310,7 @@ export default function agyBridgeExtension(pi: ExtensionAPI, options: AgyBridgeO
 
 			try {
 				const prompt = buildAgyBridgePrompt(systemPrompt, tools, transcript.messages);
-				const effort = streamOpts?.reasoning && streamOpts.reasoning !== "off" ? streamOpts.reasoning : "medium";
+				const effort = streamOpts?.reasoning ? streamOpts.reasoning : "medium";
 				const args = buildAgyArgs(model.id, effort, "plan");
 
 				stream.push({ type: "start", partial: output });

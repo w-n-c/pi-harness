@@ -211,7 +211,4 @@ bun run typecheck  # tsc --noEmit
 ```
 
 > Note: Bun strips types without checking them, so the test suite does not type-check on its
-> own. `bun run typecheck` currently reports a **known baseline of 8 errors** in
-> `agent/extensions/agy-bridge.ts` (4) and `agent/extensions/guardrails.ts` (4) — pre-existing
-> tool-call and tool-input union typing issues, not regressions. New errors beyond that baseline
-> are yours to fix.
+> own. Run `bun run typecheck` (currently clean) to check `agent/extensions/`.

@@ -136,6 +136,21 @@ describe("Seam 2: Lifecycle Guardrails (Layer 1 Hook + Layer 2 OS Git Shim)", ()
 			content: `{"CUSTOM_VENDOR_API_KEY": "$CUSTOM_VENDOR_API_KEY", "PRIMARY_KEY": "user_id"}`,
 		});
 		expect(safeEnvRef.result).toBeUndefined();
+
+		// Regression: the old code read `input.newText`, which never exists on an edit
+		// (edit takes { path, edits: [{ oldText, newText }] }), so edit content bypassed the scan.
+		const editSecret = await harness.runToolCall("edit", {
+			path: "src/config.ts",
+			edits: [{ oldText: "const API_KEY = ''", newText: "const API_KEY = '9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c'" }],
+		});
+		expect(editSecret.result?.block).toBe(true);
+		expect(editSecret.result?.terminate).toBe(true);
+
+		const editSafe = await harness.runToolCall("edit", {
+			path: "src/config.ts",
+			edits: [{ oldText: "const a = 1", newText: "const a = 2" }],
+		});
+		expect(editSafe.result).toBeUndefined();
 	});
 
 	test("Layer 2 OS-level PATH git shim blocks deep subprocess git push/reset while allowing safe git and approved calls", () => {
