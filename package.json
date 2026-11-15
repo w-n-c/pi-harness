@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "bun test"
+    "setup": "scripts/link-node-modules.sh",
+    "test": "mise exec bun -- bun test",
+    "typecheck": "mise exec bun -- bun x tsc --noEmit"
   }
 }

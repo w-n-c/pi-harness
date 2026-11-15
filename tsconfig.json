@@ -1,27 +1,13 @@
 {
   "compilerOptions": {
-    "target": "ES2023",
+    "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "allowImportingTsExtensions": true,
-    "baseUrl": ".",
-    "paths": {
-      "@earendil-works/*": [
-        "./agent/install/releases/1.5.0/node_modules/@earendil-works/*"
-      ],
-      "typebox": [
-        "./agent/install/releases/1.5.0/node_modules/typebox"
-      ],
-      "typebox/*": [
-        "./agent/install/releases/1.5.0/node_modules/typebox/*"
-      ]
-    }
+    "allowImportingTsExtensions": true
   },
-  "include": [
-    "agent/extensions/**/*.ts",
-    "tests/**/*.ts"
-  ]
+  "include": ["agent/extensions/**/*.ts"],
+  "exclude": ["node_modules"]
 }
