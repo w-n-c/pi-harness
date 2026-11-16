@@ -6,5 +6,7 @@
     "reserveTokens": 16384,
     "keepRecentTokens": 25000
   },
-  "packages": []
+  "packages": [
+    "npm:@yusukeshib/pi-token-counter"
+  ]
 }
