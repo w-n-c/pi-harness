@@ -1,5 +1,12 @@
 ## Agent skills
 
+### Writing fragments
+
+When a session produces a fragment-worthy moment (a leading word, a war story, a
+sharp design tension, a coinage), append it to `.scratch/writing/fragments.md` in
+this repo (create `.scratch/` if absent). Aim for prose, not decision-record
+voice.
+
 ### Workflow routing
 
 Most skills in `~/.agents/skills/` set `disable-model-invocation: true`, so you **cannot** load them yourself. Only the user can run them as `/skill:<name>`. When a task matches one, name the exact command and hand off explicitly.
@@ -18,12 +25,12 @@ Default five canonical triage roles (`needs-triage`, `needs-info`, `ready-for-ag
 
 Single-context layout (`GLOSSARY.md` and `docs/adr/` at the repo root). See `docs/agents/domain.md`.
 
-### MCP servers
+### Research & facts
 
-Built-in MCP with `"exposure": "deferred"` only; prefer standard CLI tools over MCP. See `docs/agents/mcp-guide.md`.
+- **Fetched, not remembered.** A claim about what a service or tool can do (or its current limits) is a doc lookup made at the moment of dependence; memory only forms the hypothesis.
+- Tool docs: **context7**; landscape, comparisons, news: **exa** (both deferred MCP). Prefer CLI for anything a CLI does. See `docs/agents/mcp-guide.md`.
 
 ### CLI tools & sandbox runtime
 
 - Always use `fd` instead of `find`, `rg` instead of `grep -r`, and `jq` instead of inline Python/Node JSON scripts. Never scan `/` outside the workspace.
 - `bun` is installed via `mise` under `~/.local/share/mise/installs/`. If a sandboxed command cannot find `bun`, do not search the filesystem for it; run unsandboxed (`BypassSandbox: true`).
-

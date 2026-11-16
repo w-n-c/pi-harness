@@ -14,6 +14,7 @@ Pi 1.5.0 includes built-in MCP support (`builtin:mcp` + `builtin:tool-search` + 
 
 1. **Global Web Search & Library Docs (`~/.pi/agent/mcp.json`)**:
    - Already configured globally via `exa` (`https://mcp.exa.ai/mcp`) and `context7` (`@upstash/context7-mcp`).
+   - **Which for what:** `context7` for official library/tool docs (resolve the library id first); `exa` for landscape, comparisons, and news.
 2. **Browser / DOM Inspection (Project-local `.pi/mcp.json`)**:
    - Add `@playwright/mcp` only in frontend web projects where the agent must click elements, inspect computed styles, or read browser console errors.
 3. **SaaS APIs without a clean local CLI (Project-local `.pi/mcp.json`)**:
