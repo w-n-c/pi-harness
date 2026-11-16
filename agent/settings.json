@@ -8,5 +8,6 @@
   },
   "packages": [
     "npm:@yusukeshib/pi-token-counter"
-  ]
+  ],
+  "hideThinkingBlock": true
 }
