@@ -8,8 +8,8 @@ import { loadSkillModelsConfig, type ModelTier, resolveTierForProvider } from ".
 
 const MAX_CONCURRENCY = 4;
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
-const READ_ONLY_TOOLS = "read,grep,find,ls";
-const READ_WRITE_TOOLS = "read,write,edit,bash,grep,find,ls";
+const READ_ONLY_TOOLS = "read,grep,find,ls,tool_search";
+const READ_WRITE_TOOLS = "read,write,edit,bash,grep,find,ls,tool_search";
 
 export interface SubagentTaskInput {
 	prompt: string;

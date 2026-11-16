@@ -79,7 +79,7 @@ describe("Seam 4: Provider-Agnostic Subagent (child Pi process)", () => {
 
 		await tool.execute("c1", { prompt: "read only" }, undefined, undefined, ctx);
 		const readOnlyTools = calls[0][calls[0].indexOf("--tools") + 1];
-		expect(readOnlyTools).toBe("read,grep,find,ls");
+		expect(readOnlyTools).toBe("read,grep,find,ls,tool_search");
 		expect(readOnlyTools).not.toContain("write");
 		expect(readOnlyTools).not.toContain("bash");
 
