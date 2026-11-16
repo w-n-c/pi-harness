@@ -9,6 +9,7 @@ const DESTRUCTIVE_BASH_PATTERNS: Array<{ label: string; regex: RegExp }> = [
 	{ label: "git reset --hard", regex: /\bgit\s+reset\s+--hard\b|['"]--hard['"]/i },
 	{ label: "git clean -f", regex: /\bgit\s+clean\s+-[a-z]*f/i },
 	{ label: "git branch -D", regex: /\bgit\s+branch\s+-D\b/ },
+	{ label: "git stash drop/clear", regex: /\bgit\s+stash\s+(?:-\S+\s+)*(?:drop|clear)\b/ },
 	{ label: "git checkout/restore .", regex: /\bgit\s+(checkout|restore)\s+\.(?:\s|$|;|&|\|)/ },
 	{ label: "recursive delete (rm -rf)", regex: /\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r|--recursive)\b/ },
 	{ label: "inline script recursive delete", regex: /\b(shutil\.rmtree|fs\.rmSync|fs\.rmdirSync|os\.remove)\b/ },
@@ -175,13 +176,17 @@ export default function guardrailsExtension(pi: ExtensionAPI) {
 							reason: `User declined confirmation for destructive operation (${pattern.label}). Do NOT attempt to work around this refusal with another command or script; wait for user instructions.`,
 						};
 					}
-					event.input.command = `export PATH="${shimDir}:$PATH" PI_ALLOW_DANGEROUS_GIT=1; ${command}`;
+					event.input.command = `export PATH="${shimDir}:$PATH" PI_ALLOW_DANGEROUS_GIT=1; ${command}; unset PI_ALLOW_DANGEROUS_GIT`;
 					return undefined;
 				}
 			}
 
-			if (!command.includes(shimDir)) {
-				event.input.command = `export PATH="${shimDir}:$PATH"; ${command}`;
+			if (command.includes(shimDir)) {
+				// Clear any bypass a previous approval left in the persistent shell, so
+				// the escape hatch never outlives the one command it was granted for.
+				event.input.command = `unset PI_ALLOW_DANGEROUS_GIT 2>/dev/null; ${command}`;
+			} else {
+				event.input.command = `unset PI_ALLOW_DANGEROUS_GIT 2>/dev/null; export PATH="${shimDir}:$PATH"; ${command}`;
 			}
 		}
 

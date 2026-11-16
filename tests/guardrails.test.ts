@@ -1,7 +1,56 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import * as path from "node:path";
 import guardrailsExtension from "../agent/extensions/guardrails.ts";
+
+const SHIM_PATH = path.resolve(import.meta.dir, "..", "agent", "guardrails-bin", "git");
+
+// The shim only decides for blocked cases; for allowed cases it execs real git.
+// Run it in a throwaway directory so an allowed `git stash` can never touch the
+// repo under test.
+const ISOLATED_CWD = mkdtempSync(path.join(tmpdir(), "pi-shim-"));
+
+type GitCase = { argv: string[]; blocked: boolean };
+
+// Literal forms the agent types directly. Both layers must agree on these, so
+// this table is asserted against the OS shim and the Layer 1 hook alike.
+const LITERAL_GIT_CASES: GitCase[] = [
+	{ argv: ["push"], blocked: true },
+	{ argv: ["push", "origin", "main"], blocked: true },
+	{ argv: ["reset", "--hard"], blocked: true },
+	{ argv: ["clean", "-fd"], blocked: true },
+	{ argv: ["branch", "-D", "feature"], blocked: true },
+	{ argv: ["checkout", "."], blocked: true },
+	{ argv: ["restore", "."], blocked: true },
+	{ argv: ["stash", "drop"], blocked: true },
+	{ argv: ["stash", "clear"], blocked: true },
+	{ argv: ["stash", "-q", "clear"], blocked: true },
+	{ argv: ["stash"], blocked: false },
+	{ argv: ["stash", "-m", "wip"], blocked: false },
+	{ argv: ["stash", "push", "-m", "wip"], blocked: false },
+	{ argv: ["stash", "pop"], blocked: false },
+	{ argv: ["branch", "push"], blocked: false },
+	{ argv: ["commit", "-m", "push"], blocked: false },
+	{ argv: ["status"], blocked: false },
+];
+
+// Global options before the subcommand. The shim resolves the subcommand by
+// argv position; the Layer 1 hook is a literal-string matcher, so these are
+// shim-only.
+const GLOBAL_OPTION_GIT_CASES: GitCase[] = [
+	{ argv: ["-C", ISOLATED_CWD, "push"], blocked: true },
+	{ argv: ["-c", "user.name=x", "reset", "--hard"], blocked: true },
+	{ argv: ["--git-dir=/tmp/.git", "stash", "clear"], blocked: true },
+	{ argv: ["-C", ISOLATED_CWD, "stash", "push", "-m", "wip"], blocked: false },
+];
+
+function runShim(argv: string[]) {
+	const env = { ...process.env };
+	delete env.PI_ALLOW_DANGEROUS_GIT;
+	return spawnSync(SHIM_PATH, argv, { env, cwd: ISOLATED_CWD, encoding: "utf8" });
+}
 
 function createFakeGuardrailHarness(confirmResult = false) {
 	const toolCallHandlers: Array<(event: any, ctx: any) => Promise<any>> = [];
@@ -153,8 +202,52 @@ describe("Seam 2: Lifecycle Guardrails (Layer 1 Hook + Layer 2 OS Git Shim)", ()
 		expect(editSafe.result).toBeUndefined();
 	});
 
+	test("Layer 2 git shim blocks only the exact dangerous subcommand, not the bare word", () => {
+		for (const { argv, blocked } of [...LITERAL_GIT_CASES, ...GLOBAL_OPTION_GIT_CASES]) {
+			const res = runShim(argv);
+			const marker = res.stderr.includes("BLOCKED by Pi git guardrail");
+			expect(marker, `git ${argv.join(" ")} (blocked=${blocked})`).toBe(blocked);
+		}
+	});
+
+	test("Layer 1 hook prompts on exactly the same literal forms the shim blocks", async () => {
+		for (const { argv, blocked } of LITERAL_GIT_CASES) {
+			const harness = createFakeGuardrailHarness(false);
+			guardrailsExtension(harness.pi);
+
+			const res = await harness.runToolCall("bash", { command: `git ${argv.join(" ")}` });
+			expect(harness.confirmPrompts.length, `git ${argv.join(" ")}`).toBe(blocked ? 1 : 0);
+			expect(Boolean(res.result?.block), `git ${argv.join(" ")}`).toBe(blocked);
+		}
+	});
+
+	test("scopes the shim bypass to the approved command instead of leaking into the session shell", async () => {
+		const harness = createFakeGuardrailHarness(true);
+		guardrailsExtension(harness.pi);
+		const cwd = mkdtempSync(path.join(tmpdir(), "pi-guardrail-"));
+
+		const approved = await harness.runToolCall("bash", { command: "git stash drop" });
+		expect(approved.result).toBeUndefined();
+		expect(approved.mutatedInput.command).toContain("PI_ALLOW_DANGEROUS_GIT=1");
+		const afterApproved = spawnSync(
+			"bash",
+			["-c", `${approved.mutatedInput.command}; printf 'AFTER=%s' "\${PI_ALLOW_DANGEROUS_GIT:-unset}"`],
+			{ cwd, encoding: "utf8" },
+		);
+		expect(afterApproved.stdout).toContain("AFTER=unset");
+
+		// A bypass leaked by a previous call must not survive into the next command.
+		const safe = await harness.runToolCall("bash", { command: "git status" });
+		const afterSafe = spawnSync(
+			"bash",
+			["-c", `export PI_ALLOW_DANGEROUS_GIT=1; ${safe.mutatedInput.command}; printf 'AFTER=%s' "\${PI_ALLOW_DANGEROUS_GIT:-unset}"`],
+			{ cwd, encoding: "utf8" },
+		);
+		expect(afterSafe.stdout).toContain("AFTER=unset");
+	});
+
 	test("Layer 2 OS-level PATH git shim blocks deep subprocess git push/reset while allowing safe git and approved calls", () => {
-		const shimDir = path.resolve("/home/w-n-c/.pi/agent/guardrails-bin");
+		const shimDir = path.dirname(SHIM_PATH);
 		const envWithShim = {
 			...process.env,
 			PATH: `${shimDir}:${process.env.PATH}`,

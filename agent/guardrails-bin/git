@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Layer 2 git guardrail: a PATH shim that blocks dangerous git invocations,
+# including ones buried in subprocesses that Layer 1 never sees.
 set -euo pipefail
 
 REAL_GIT="/usr/bin/git"
@@ -6,18 +8,101 @@ if [ ! -x "$REAL_GIT" ]; then
   REAL_GIT="$(which -a git | grep -v "guardrails-bin/git" | head -n 1)"
 fi
 
+# Set only by the Layer 1 hook, and only on an explicitly approved command.
 if [ "${PI_ALLOW_DANGEROUS_GIT:-0}" = "1" ]; then
   exec "$REAL_GIT" "$@"
 fi
 
-ARGS_STR="$*"
+has_arg() {
+  local want="$1" arg
+  shift
+  for arg in "$@"; do
+    [[ "$arg" == "$want" ]] && return 0
+  done
+  return 1
+}
 
-if [[ "$ARGS_STR" =~ (^|[[:space:]])(push)($|[[:space:]]) ]] ||
-   [[ "$ARGS_STR" =~ (^|[[:space:]])reset[[:space:]]+--hard($|[[:space:]]) ]] ||
-   [[ "$ARGS_STR" =~ (^|[[:space:]])clean[[:space:]]+-[a-zA-Z]*f ]] ||
-   [[ "$ARGS_STR" =~ (^|[[:space:]])branch[[:space:]]+-D($|[[:space:]]) ]] ||
-   [[ "$ARGS_STR" =~ (^|[[:space:]])(checkout|restore)[[:space:]]+\.($|[[:space:]]) ]]; then
-  echo "BLOCKED by Pi git guardrail: 'git $ARGS_STR' is a destructive or remote git operation. Do NOT attempt to work around this guardrail via alternative scripts; ask the user for confirmation." >&2
+has_arg_matching() {
+  local pattern="$1" arg
+  shift
+  for arg in "$@"; do
+    [[ "$arg" =~ $pattern ]] && return 0
+  done
+  return 1
+}
+
+# Resolve the subcommand by argv position: the first argument that is neither a
+# global option nor a global option's value. Matching on subcommand position is
+# what keeps `git stash push` and `git branch push` from reading as a remote
+# push, and keeps the bare word out of `git commit -m push` from mattering.
+args=("$@")
+subcommand=""
+subcommand_index=0
+i=0
+while (( i < ${#args[@]} )); do
+  arg="${args[$i]}"
+  case "$arg" in
+    -C|-c|--git-dir|--work-tree|--namespace|--config-env|--super-prefix|--attr-source|--exec-path)
+      i=$(( i + 2 ))
+      continue
+      ;;
+    --git-dir=*|--work-tree=*|--namespace=*|--config-env=*|--super-prefix=*|--attr-source=*|--exec-path=*|--list-cmds=*)
+      i=$(( i + 1 ))
+      continue
+      ;;
+    -*)
+      i=$(( i + 1 ))
+      continue
+      ;;
+    *)
+      subcommand="$arg"
+      subcommand_index=$i
+      break
+      ;;
+  esac
+done
+
+# `stash` takes its own options before the subcommand (`git stash -q clear`),
+# so scan past them rather than reading the token next to `stash`.
+stash_subcommand=""
+if [ "$subcommand" = "stash" ]; then
+  j=$(( subcommand_index + 1 ))
+  while (( j < ${#args[@]} )); do
+    arg="${args[$j]}"
+    case "$arg" in
+      -m|--message)
+        j=$(( j + 2 ))
+        continue
+        ;;
+      -*)
+        j=$(( j + 1 ))
+        continue
+        ;;
+      *)
+        stash_subcommand="$arg"
+        break
+        ;;
+    esac
+  done
+fi
+
+blocked=""
+case "$subcommand" in
+  push) blocked="remote push" ;;
+  reset) has_arg --hard "$@" && blocked="hard reset" ;;
+  clean) has_arg_matching '^-[a-zA-Z]*f' "$@" && blocked="forced clean" ;;
+  branch) has_arg -D "$@" && blocked="force branch delete" ;;
+  checkout|restore) has_arg . "$@" && blocked="discarding the working tree" ;;
+  stash)
+    case "$stash_subcommand" in
+      drop) blocked="stash drop" ;;
+      clear) blocked="stash clear" ;;
+    esac
+    ;;
+esac
+
+if [ -n "$blocked" ]; then
+  echo "BLOCKED by Pi git guardrail: '$blocked' ('git $*') is a destructive or remote git operation. Do NOT attempt to work around this guardrail via alternative scripts; ask the user for confirmation." >&2
   exit 126
 fi
 
