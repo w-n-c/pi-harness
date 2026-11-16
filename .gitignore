@@ -1,5 +1,6 @@
 # Pi runtime & secrets
 agent/auth.json
+agent/mcp.json
 agent/mcp-auth.json
 agent/models-store.json
 agent/sessions/
