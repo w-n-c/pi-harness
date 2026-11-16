@@ -7,8 +7,13 @@ const MAX_CONSECUTIVE_FAILURES = 3;
 const DESTRUCTIVE_BASH_PATTERNS: Array<{ label: string; regex: RegExp }> = [
 	{ label: "git push", regex: /\bgit\s+push\b|['"]push['"]/i },
 	{ label: "git reset --hard", regex: /\bgit\s+reset\s+--hard\b|['"]--hard['"]/i },
-	{ label: "git clean -f", regex: /\bgit\s+clean\s+-[a-z]*f/i },
+	{ label: "git clean -f", regex: /\bgit\s+clean\s+(?:-[a-z]*f|--force)/i },
 	{ label: "git branch -D", regex: /\bgit\s+branch\s+-D\b/ },
+	{
+		label: "git branch force delete",
+		// `-D` is its own entry; this covers the long/separated forms in either order.
+		regex: /\bgit\s+branch\s+(?=[^;&|]*(?:--delete|-d)(?=\s|$|[;&|]))(?=[^;&|]*(?:--force|-f)(?=\s|$|[;&|]))/,
+	},
 	{ label: "git stash drop/clear", regex: /\bgit\s+stash\s+(?:-\S+\s+)*(?:drop|clear)\b/ },
 	{ label: "git checkout/restore .", regex: /\bgit\s+(checkout|restore)\s+\.(?:\s|$|;|&|\|)/ },
 	{ label: "recursive delete (rm -rf)", regex: /\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r|--recursive)\b/ },
@@ -172,8 +177,7 @@ export default function guardrailsExtension(pi: ExtensionAPI) {
 					if (!approved) {
 						return {
 							block: true,
-							terminate: true,
-							reason: `User declined confirmation for destructive operation (${pattern.label}). Do NOT attempt to work around this refusal with another command or script; wait for user instructions.`,
+							reason: `User declined confirmation for destructive operation (${pattern.label}). Do NOT attempt to work around this refusal with another command or script; propose a safer alternative or ask the user how to proceed.`,
 						};
 					}
 					event.input.command = `export PATH="${shimDir}:$PATH" PI_ALLOW_DANGEROUS_GIT=1; ${command}; unset PI_ALLOW_DANGEROUS_GIT`;

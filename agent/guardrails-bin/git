@@ -90,8 +90,18 @@ blocked=""
 case "$subcommand" in
   push) blocked="remote push" ;;
   reset) has_arg --hard "$@" && blocked="hard reset" ;;
-  clean) has_arg_matching '^-[a-zA-Z]*f' "$@" && blocked="forced clean" ;;
-  branch) has_arg -D "$@" && blocked="force branch delete" ;;
+  clean)
+    if has_arg_matching '^-[a-zA-Z]*f' "$@" || has_arg --force "$@"; then
+      blocked="forced clean"
+    fi
+    ;;
+  branch)
+    # `-D` implies force; the long forms spell out `--delete` plus a force flag.
+    if has_arg -D "$@" ||
+      { { has_arg --delete "$@" || has_arg -d "$@"; } && { has_arg -f "$@" || has_arg --force "$@"; }; }; then
+      blocked="force branch delete"
+    fi
+    ;;
   checkout|restore) has_arg . "$@" && blocked="discarding the working tree" ;;
   stash)
     case "$stash_subcommand" in

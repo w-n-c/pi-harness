@@ -21,7 +21,11 @@ const LITERAL_GIT_CASES: GitCase[] = [
 	{ argv: ["push", "origin", "main"], blocked: true },
 	{ argv: ["reset", "--hard"], blocked: true },
 	{ argv: ["clean", "-fd"], blocked: true },
+	{ argv: ["clean", "--force"], blocked: true },
 	{ argv: ["branch", "-D", "feature"], blocked: true },
+	{ argv: ["branch", "--delete", "--force", "feature"], blocked: true },
+	{ argv: ["branch", "--delete", "-f", "feature"], blocked: true },
+	{ argv: ["branch", "-d", "--force", "feature"], blocked: true },
 	{ argv: ["checkout", "."], blocked: true },
 	{ argv: ["restore", "."], blocked: true },
 	{ argv: ["stash", "drop"], blocked: true },
@@ -36,10 +40,9 @@ const LITERAL_GIT_CASES: GitCase[] = [
 	{ argv: ["status"], blocked: false },
 ];
 
-// Global options before the subcommand. The shim resolves the subcommand by
-// argv position; the Layer 1 hook is a literal-string matcher, so these are
-// shim-only.
-const GLOBAL_OPTION_GIT_CASES: GitCase[] = [
+// Forms only the shim resolves: global options before the subcommand, and flag
+// combinations the Layer 1 literal-string matcher does not spell out.
+const SHIM_ONLY_GIT_CASES: GitCase[] = [
 	{ argv: ["-C", ISOLATED_CWD, "push"], blocked: true },
 	{ argv: ["-c", "user.name=x", "reset", "--hard"], blocked: true },
 	{ argv: ["--git-dir=/tmp/.git", "stash", "clear"], blocked: true },
@@ -116,7 +119,7 @@ describe("Seam 2: Lifecycle Guardrails (Layer 1 Hook + Layer 2 OS Git Shim)", ()
 		expect(readRes.result).toBeUndefined();
 	});
 
-	test("catches chained and inline-script destructive commands, terminating turn when user declines", async () => {
+	test("blocks chained and inline-script destructive commands on decline without ending the turn", async () => {
 		const harness = createFakeGuardrailHarness(false);
 		guardrailsExtension(harness.pi);
 
@@ -125,14 +128,15 @@ describe("Seam 2: Lifecycle Guardrails (Layer 1 Hook + Layer 2 OS Git Shim)", ()
 		});
 		expect(harness.confirmPrompts.length).toBe(1);
 		expect(chainedGit.result?.block).toBe(true);
-		expect(chainedGit.result?.terminate).toBe(true);
+		// A declined command is refused; the turn stays alive so the agent can adapt.
+		expect(chainedGit.result?.terminate).toBeFalsy();
 		expect(chainedGit.result?.reason).toContain("Do NOT attempt to work around");
 
 		const inlinePy = await harness.runToolCall("bash", {
 			command: `python3 -c "import shutil; shutil.rmtree('/tmp/build')"`,
 		});
 		expect(inlinePy.result?.block).toBe(true);
-		expect(inlinePy.result?.terminate).toBe(true);
+		expect(inlinePy.result?.terminate).toBeFalsy();
 	});
 
 	test("injects PI_ALLOW_DANGEROUS_GIT=1 when user approves destructive git command", async () => {
@@ -203,7 +207,7 @@ describe("Seam 2: Lifecycle Guardrails (Layer 1 Hook + Layer 2 OS Git Shim)", ()
 	});
 
 	test("Layer 2 git shim blocks only the exact dangerous subcommand, not the bare word", () => {
-		for (const { argv, blocked } of [...LITERAL_GIT_CASES, ...GLOBAL_OPTION_GIT_CASES]) {
+		for (const { argv, blocked } of [...LITERAL_GIT_CASES, ...SHIM_ONLY_GIT_CASES]) {
 			const res = runShim(argv);
 			const marker = res.stderr.includes("BLOCKED by Pi git guardrail");
 			expect(marker, `git ${argv.join(" ")} (blocked=${blocked})`).toBe(blocked);
