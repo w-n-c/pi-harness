@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import subagentExtension, { getPiInvocation } from "../agent/extensions/subagent.ts";
+import subagentExtension, {
+	getPiInvocation,
+	prepareSubagentLog,
+	resolveSubagentLogPath,
+	teeToLog,
+} from "../agent/extensions/subagent.ts";
 
 function writeConfig(providers: Record<string, any>, defaultTier = "balanced") {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-"));
@@ -158,5 +163,96 @@ describe("Seam 4: Provider-Agnostic Subagent (child Pi process)", () => {
 		const tool = harness.getTool();
 		await tool.execute("id", { prompt: "x" }, undefined, undefined, {});
 		expect(Object.values(getPiInvocation(calls[0])).flat()).not.toContain("agy");
+	});
+
+	test("surfaces stderr and a non-zero exit code for a single task", async () => {
+		const configPath = writeConfig({ openrouter: { balanced: { model: "m" } } });
+		const harness = createFakePi();
+		subagentExtension(harness.pi, {
+			configPath,
+			runPiSubagent: async () => ({ response: "partial output", exitCode: 2, stderr: "child exploded" }),
+		});
+
+		const res = await harness
+			.getTool()
+			.execute("c", { prompt: "x" }, undefined, undefined, { model: { provider: "openrouter" } });
+
+		expect(res.content[0].text).toContain("partial output");
+		expect(res.content[0].text).toContain("child exploded");
+		expect(res.content[0].text).toContain("exit code 2");
+	});
+
+	test("does not add stderr/exit noise to a clean single task", async () => {
+		const configPath = writeConfig({ openrouter: { balanced: { model: "m" } } });
+		const harness = createFakePi();
+		subagentExtension(harness.pi, {
+			configPath,
+			runPiSubagent: async () => ({ response: "Done: Explore repo", exitCode: 0, stderr: "" }),
+		});
+
+		const res = await harness
+			.getTool()
+			.execute("c", { prompt: "x" }, undefined, undefined, { model: { provider: "openrouter" } });
+
+		expect(res.content[0].text).toBe("Done: Explore repo");
+	});
+
+	test("warns when a read-write task returns a suspiciously short final message", async () => {
+		const configPath = writeConfig({ openrouter: { balanced: { model: "m" } } });
+		const harness = createFakePi();
+		subagentExtension(harness.pi, {
+			configPath,
+			runPiSubagent: async () => ({ response: "Done.", exitCode: 0, stderr: "" }),
+		});
+
+		const res = await harness
+			.getTool()
+			.execute("c", { prompt: "x", mode: "read-write" }, undefined, undefined, { model: { provider: "openrouter" } });
+
+		expect(res.content[0].text).toContain("very short final message");
+		expect(res.content[0].text).toContain("5 chars");
+	});
+
+	test("does not warn for a long read-write result or a short read-only result", async () => {
+		const configPath = writeConfig({ openrouter: { balanced: { model: "m" } } });
+		const harness = createFakePi();
+		subagentExtension(harness.pi, {
+			configPath,
+			runPiSubagent: async (args) => {
+				// Long for read-write, short for read-only.
+				const readWrite = args[args.indexOf("--tools") + 1].includes("write");
+				return { response: readWrite ? "x".repeat(300) : "Done.", exitCode: 0, stderr: "" };
+			},
+		});
+
+		const tool = harness.getTool();
+		const ctx = { model: { provider: "openrouter" } };
+		const long = await tool.execute("c1", { prompt: "x", mode: "read-write" }, undefined, undefined, ctx);
+		const shortReadOnly = await tool.execute("c2", { prompt: "x" }, undefined, undefined, ctx);
+
+		expect(long.content[0].text).not.toContain("very short final message");
+		expect(shortReadOnly.content[0].text).not.toContain("very short final message");
+	});
+
+	test("teeToLog appends chunks and never throws on bad paths", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-logs-"));
+		const logPath = resolveSubagentLogPath(dir, new Date("2024-01-02T03:04:05.000Z"), 4242);
+		expect(path.basename(logPath)).toBe("2024-01-02T03-04-05.000Z-4242.log");
+
+		teeToLog(logPath, "hello ");
+		teeToLog(logPath, Buffer.from("world"));
+		expect(fs.readFileSync(logPath, "utf8")).toBe("hello world");
+
+		expect(() => teeToLog(undefined, "x")).not.toThrow();
+		expect(() => teeToLog("/nonexistent-dir-xyz/nope/a.log", "x")).not.toThrow();
+	});
+
+	test("prepareSubagentLog creates the log directory and returns a path inside it", () => {
+		const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-logs-")), "nested", "subagents");
+		const logPath = prepareSubagentLog(dir);
+
+		expect(logPath).toBeDefined();
+		expect(path.dirname(logPath!)).toBe(dir);
+		expect(fs.existsSync(dir)).toBe(true);
 	});
 });

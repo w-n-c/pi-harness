@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -10,6 +11,13 @@ const MAX_CONCURRENCY = 4;
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const READ_ONLY_TOOLS = "read,grep,find,ls,tool_search";
 const READ_WRITE_TOOLS = "read,write,edit,bash,grep,find,ls,tool_search";
+
+/**
+ * A read-write child that exits cleanly with no stderr but a final message shorter
+ * than this is suspiciously likely to have ended its turn on narration instead of
+ * actually doing the work. We surface a warning rather than silently passing it up.
+ */
+export const READ_WRITE_SHORT_RESPONSE_THRESHOLD = 120;
 
 export interface SubagentTaskInput {
 	prompt: string;
@@ -23,6 +31,8 @@ export interface SubagentRunResult {
 	response: string;
 	exitCode: number | null;
 	stderr: string;
+	/** Path to the per-run child stdout/stderr log, when one could be created. */
+	logPath?: string;
 }
 
 export interface SubagentOptions {
@@ -33,6 +43,48 @@ export interface SubagentOptions {
 		prompt: string,
 		signal?: AbortSignal,
 	) => Promise<SubagentRunResult>;
+}
+
+/**
+ * Default directory for per-run child logs. Overridable via `PI_SUBAGENT_LOG_DIR`.
+ * Logs live outside the child session so a stalled/failed child still leaves an
+ * artifact to inspect even under `--no-session`.
+ */
+export function defaultSubagentLogDir(): string {
+	return process.env.PI_SUBAGENT_LOG_DIR ?? path.join(os.homedir(), ".pi", "agent", "logs", "subagents");
+}
+
+/** Builds a `<ISO-timestamp>-<pid>.log` path with the `:` characters sanitized. */
+export function resolveSubagentLogPath(
+	logDir: string = defaultSubagentLogDir(),
+	now: Date = new Date(),
+	pid: number = process.pid,
+): string {
+	const stamp = now.toISOString().replace(/:/g, "-");
+	return path.join(logDir, `${stamp}-${pid}.log`);
+}
+
+/**
+ * Creates the log directory and returns a fresh log path. Best-effort: returns
+ * `undefined` instead of throwing if the directory cannot be prepared.
+ */
+export function prepareSubagentLog(logDir: string = defaultSubagentLogDir()): string | undefined {
+	try {
+		fs.mkdirSync(logDir, { recursive: true });
+		return resolveSubagentLogPath(logDir);
+	} catch {
+		return undefined;
+	}
+}
+
+/** Appends a chunk to a run log. Never throws: logging must not break a run. */
+export function teeToLog(logPath: string | undefined, chunk: Buffer | string): void {
+	if (!logPath) return;
+	try {
+		fs.appendFileSync(logPath, chunk);
+	} catch {
+		// Best-effort only.
+	}
 }
 
 /**
@@ -64,6 +116,7 @@ async function defaultRunPiSubagent(
 	signal?: AbortSignal,
 ): Promise<SubagentRunResult> {
 	const invocation = getPiInvocation(args);
+	const logPath = prepareSubagentLog();
 	return new Promise<SubagentRunResult>((resolve, reject) => {
 		const proc = spawn(invocation.command, invocation.args, {
 			stdio: ["pipe", "pipe", "pipe"],
@@ -114,13 +167,17 @@ async function defaultRunPiSubagent(
 		};
 
 		proc.stdout.on("data", (data) => {
-			buffer += data.toString("utf8");
+			const text = data.toString("utf8");
+			teeToLog(logPath, text);
+			buffer += text;
 			const lines = buffer.split("\n");
 			buffer = lines.pop() ?? "";
 			for (const line of lines) processLine(line);
 		});
 		proc.stderr.on("data", (data) => {
-			stderr += data.toString("utf8");
+			const text = data.toString("utf8");
+			teeToLog(logPath, text);
+			stderr += text;
 		});
 		proc.on("close", (code) => {
 			if (buffer.trim()) processLine(buffer);
@@ -129,7 +186,7 @@ async function defaultRunPiSubagent(
 					reject(new Error(`Subagent exceeded ${DEFAULT_TIMEOUT_MS}ms and was killed.`));
 					return;
 				}
-				resolve({ response: finalText.trim(), exitCode: code, stderr: stderr.trim() });
+				resolve({ response: finalText.trim(), exitCode: code, stderr: stderr.trim(), logPath });
 			});
 		});
 		proc.on("error", (error) => {
@@ -139,6 +196,33 @@ async function defaultRunPiSubagent(
 		proc.stdin.write(prompt);
 		proc.stdin.end();
 	});
+}
+
+/**
+ * Renders one subagent result. `stderr` and a non-zero `exitCode` are surfaced so a
+ * single-task run cannot silently swallow a failed child. A read-write run that exits
+ * cleanly with no stderr but only a tiny final message gets an explicit warning.
+ */
+function formatSubagentResult(result: SubagentRunResult & { mode: "read-only" | "read-write" }): string {
+	const parts = [result.response];
+	if (result.stderr) {
+		parts.push(`<stderr>\n${result.stderr}\n</stderr>`);
+	}
+	if (result.exitCode !== null && result.exitCode !== 0) {
+		parts.push(`<exit>\nexit code ${result.exitCode}\n</exit>`);
+	}
+	if (
+		result.mode === "read-write" &&
+		result.exitCode === 0 &&
+		!result.stderr &&
+		result.response.length < READ_WRITE_SHORT_RESPONSE_THRESHOLD
+	) {
+		const logSuffix = result.logPath ? ` Log: ${result.logPath}` : "";
+		parts.push(
+			`⚠️ read-write subagent returned a very short final message (${result.response.length} chars) with no error — verify the work actually landed.${logSuffix}`,
+		);
+	}
+	return parts.join("\n\n");
 }
 
 export default function subagentExtension(pi: ExtensionAPI, options: SubagentOptions = {}) {
@@ -212,13 +296,11 @@ export default function subagentExtension(pi: ExtensionAPI, options: SubagentOpt
 
 			const formatted =
 				results.length === 1
-					? results[0].response
+					? formatSubagentResult(results[0])
 					: results
 							.map(
 								(r) =>
-									`### Subagent ${r.index + 1} (${r.resolvedModel}, ${r.mode})\n\n${r.response}${
-										r.stderr ? `\n\n<stderr>\n${r.stderr}\n</stderr>` : ""
-									}`,
+									`### Subagent ${r.index + 1} (${r.resolvedModel}, ${r.mode})\n\n${formatSubagentResult(r)}`,
 							)
 							.join("\n\n---\n\n");
 
