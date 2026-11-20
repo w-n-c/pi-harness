@@ -7,9 +7,9 @@
       "fast": { "model": "gemini-3.8-flash-high", "effort": "low" }
     },
     "openrouter": {
-      "deep": { "model": "deepseek/deepseek-v4-pro-0813", "effort": "high" },
-      "balanced": { "model": "deepseek/deepseek-v4.1-flash", "effort": "low" },
-      "fast": { "model": "deepseek/deepseek-v4.1-flash", "effort": "low" }
+      "deep": { "model": "anthropic/claude-sonnet-5.5", "effort": "high" },
+      "balanced": { "model": "deepseek/deepseek-v4.1-flash-1017", "effort": "medium" },
+      "fast": { "model": "deepseek/deepseek-v4.1-flash-1017", "effort": "low" }
     }
   },
   "skills": {

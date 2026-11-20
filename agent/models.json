@@ -2,18 +2,23 @@
   "providers": {
     "openrouter": {
       "modelOverrides": {
-        "deepseek/deepseek-v4-pro-0813": {
+        "anthropic/claude-sonnet-5.5": {
           "compat": {
             "openRouterRouting": {
-              "order": ["DeepSeek"],
+              "only": ["google-vertex/global", "claude-on-aws"],
               "allow_fallbacks": true
             }
           }
         },
-        "deepseek/deepseek-v4.1-flash": {
+        "deepseek/deepseek-v4.1-flash-1017": {
           "compat": {
             "openRouterRouting": {
-              "order": ["DeepInfra", "DeepSeek"],
+              "order": ["StepFun", "DeepInfra", "Cohere", "Relace"],
+              "only": ["StepFun", "DeepInfra", "Cohere", "Relace"],
+              "max_price": {
+                "prompt": 0.13,
+                "completion": 0.50
+              },
               "allow_fallbacks": true
             }
           }

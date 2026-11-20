@@ -1,7 +1,7 @@
 {
   "lastChangelogVersion": "1.5.2",
   "defaultProvider": "openrouter",
-  "defaultModel": "deepseek/deepseek-v4.1-flash",
+  "defaultModel": "deepseek/deepseek-v4.1-flash-1017",
   "compaction": {
     "reserveTokens": 16384,
     "keepRecentTokens": 25000
